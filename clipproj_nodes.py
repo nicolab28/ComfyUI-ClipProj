@@ -376,6 +376,9 @@ class ClipProjLoader:
             "required": {
                 "clip_name": (folder_paths.get_filename_list("text_encoders"), {
                     "tooltip": "Small encoder, for example a Qwen3-VL-4B"}),
+                "type": (clip_types(), {
+                    "tooltip": "Architecture to instantiate: krea2 for a "
+                               "Qwen3-VL-4B (2560 dims), boogu for a 8B (4096)"}),
                 "projection": (list_projections(), {
                     "tooltip": "Learned matrix, or a <control:...> reference"}),
                 "device": (gpu_devices(), {"tooltip": "GPU that receives the encoder"}),
@@ -390,9 +393,9 @@ class ClipProjLoader:
     CATEGORY = "ClipProj"
     DESCRIPTION = "Load a small text encoder and project it into the large one's space."
 
-    def load(self, clip_name, projection, device, mode="resident", unique_id=None):
+    def load(self, clip_name, type, projection, device, mode="resident", unique_id=None):
         """Load the encoder, then return its projected version."""
-        clip = _load_encoder(clip_name, "krea2", device, mode, unique_id)
+        clip = _load_encoder(clip_name, type, device, mode, unique_id)
         return (_wrap(clip, projection),)
 
 

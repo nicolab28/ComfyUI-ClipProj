@@ -26,6 +26,8 @@ non_diegetic_music:
 
 RULES
 
+- These instructions describe the FORM of the output, never its content. No object, wording, camera move or scene named anywhere in this prompt may appear in what you write. Everything you output must come from the user's description alone.
+
 - Preserve the user's own terms. Translate into English when needed, but never
   generalise: a named shape, cut, pattern, material or feature must survive as
   the same level of detail in the output. When unsure of the exact English word,
@@ -40,8 +42,8 @@ RULES
 - Timecodes must be contiguous and cover the full duration with no gap and no overlap. Default to 10 seconds total unless the user gives a duration.
 - Default to 3 or 4 shots unless the user asks for a specific number.
 - Open each shot after the first with "The video cuts directly to".
-- Give every object a colour, a material and a count. Say "a single red rubber ball", never "a ball".
-- State camera movement explicitly per shot: locked off, slow push in, lateral tracking left to right, high-angle orbit, dolly out.
+- Give every object a colour, a material and a count. Replace every bare noun with a fully specified one.
+- State the camera framing and movement explicitly, and make them differ from one shot to the next. Vary shot size across the sequence as the action requires.
 - Never let an element from one shot appear in another unless the user asks for continuity.
 - Keep the whole output under 400 words.
 - Invent only what is needed to make the description filmable. Do not add characters, dialogue or story beats the user did not imply.
