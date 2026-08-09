@@ -1,0 +1,23 @@
+[project]
+name = "comfyui-clipproj"
+description = "Swap a large text encoder for a small one with a learned linear projection. Cuts MiniMax H3 conditioning from 15.7 GB to 5.2 GB."
+version = "0.1.0"
+license = { file = "LICENSE" }
+repository = "https://github.com/nicolab28/ComfyUI-ClipProj"
+requires-python = ">=3.10"
+dependencies = []
+# OS Independent: nothing in the code is platform-specific (no absolute paths,
+# no win32 calls). Only the *testing* was Windows-only, which the README states.
+classifiers = [
+    "Operating System :: OS Independent",
+    "Environment :: GPU :: NVIDIA CUDA",
+    "Development Status :: 3 - Alpha",
+]
+
+[project.urls]
+Repository = "https://github.com/nicolab28/ComfyUI-ClipProj"
+
+[tool.comfy]
+PublisherId = "nicolab28"
+DisplayName = "ComfyUI-ClipProj"
+requires-comfyui = ">=0.31.0"

@@ -1,0 +1,310 @@
+{
+ "id": "clipproj-rewrite-h3-prompt",
+ "revision": 0,
+ "last_node_id": 31,
+ "last_link_id": 3,
+ "nodes": [
+  {
+   "id": 30,
+   "type": "MarkdownNote",
+   "pos": [
+    40,
+    -480
+   ],
+   "size": [
+    430,
+    420
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [],
+   "properties": {
+    "Node name for S&R": "MarkdownNote"
+   },
+   "widgets_values": [
+    "## Model Links\n\nText encoder only — **no diffusion model needed** for this workflow.\n\n- [qwen3vl_4b_fp8_scaled.safetensors](https://huggingface.co/Comfy-Org/Krea-2/blob/main/text_encoders/qwen3vl_4b_fp8_scaled.safetensors) — 5.2 GB\n- [qwen3vl_4b_bf16.safetensors](https://huggingface.co/Comfy-Org/Krea-2/blob/main/text_encoders/qwen3vl_4b_bf16.safetensors) — 8.9 GB\n\n## Model Storage Location\n\n```\nComfyUI/\n└── models/\n    └── text_encoders/\n        └── qwen3vl_4b_fp8_scaled.safetensors\n```\n\n**ClipProj Device Loader** puts it on the GPU you choose — the stock\n`CLIPLoader` only offers `default` and `cpu`. No projection is involved here:\nthe matrix only matters when conditioning a diffusion model.\n\n## Why this node and not another\n\nComfyUI's `SDClipModel.generate()` drops `embeds_info` and never calls\n`build_image_inputs`, so image tokens land at linear positions instead of\nQwen3-VL's 3D mRoPE and get no DeepStack injection. The model then invents a\nplausible description of an image it never saw. This node restores the full path.\n\n## Speed\n\n**~20 tok/s on a 3090**, far below llama.cpp or vLLM: ComfyUI re-casts weights on\nevery forward, which suits diffusion but is costly one token at a time.\n`precision` and the preloaded head mitigate it.\n"
+   ],
+   "color": "#432",
+   "bgcolor": "#653"
+  },
+  {
+   "id": 31,
+   "type": "MarkdownNote",
+   "pos": [
+    500,
+    -480
+   ],
+   "size": [
+    430,
+    420
+   ],
+   "flags": {},
+   "order": 1,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [],
+   "properties": {
+    "Node name for S&R": "MarkdownNote"
+   },
+   "widgets_values": [
+    "PROMPT REWRITING\n\nThe system prompt holds the MiniMax H3 output format:\nsubject_definitions, summary, detailed_description,\ntimecoded [Shot N] blocks, overall_soundscape,\nnon_diegetic_music — plus the rules that matter (hard\ncuts, contiguous timecodes, colour/material/count on every\nobject, explicit camera move per shot).\n\nWrite your idea in plain language in 'prompt'. Any\nlanguage works; the output is always English.\n\nPaste the result into MiniMax H3 Image to Video.\n\nmax_length must be 800 or so: a full H3 prompt runs\n550-700 tokens and gets cut mid-shot below that.\n\nA 4B is not the dedicated 27B rewriter. It holds the\nstructure reliably — that part is mechanical — but is less\ninventive on cinematography. Read the output before using\nit: if a detail is missing there, the fault is here and\nnot in the encoder or the diffusion model."
+   ],
+   "color": "#323",
+   "bgcolor": "#535"
+  },
+  {
+   "id": 1,
+   "type": "ClipProjDeviceLoader",
+   "pos": [
+    40,
+    40
+   ],
+   "size": [
+    340,
+    130
+   ],
+   "flags": {},
+   "order": 2,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "clip_name",
+     "type": "COMBO",
+     "link": null,
+     "widget": {
+      "name": "clip_name"
+     }
+    },
+    {
+     "name": "type",
+     "type": "COMBO",
+     "link": null,
+     "widget": {
+      "name": "type"
+     }
+    },
+    {
+     "name": "device",
+     "type": "COMBO",
+     "link": null,
+     "widget": {
+      "name": "device"
+     }
+    },
+    {
+     "name": "mode",
+     "type": "COMBO",
+     "link": null,
+     "widget": {
+      "name": "mode"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "name": "CLIP",
+     "type": "CLIP",
+     "links": [
+      1
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "ClipProjDeviceLoader"
+   },
+   "widgets_values": [
+    "qwen3vl_4b_fp8_scaled.safetensors",
+    "krea2",
+    "cuda:0",
+    "resident"
+   ],
+   "title": "1. Load the encoder on the GPU of your choice"
+  },
+  {
+   "id": 3,
+   "type": "ClipProjGenerate",
+   "pos": [
+    420,
+    40
+   ],
+   "size": [
+    470,
+    580
+   ],
+   "flags": {},
+   "order": 3,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "clip",
+     "type": "CLIP",
+     "link": 1
+    },
+    {
+     "name": "image",
+     "type": "IMAGE",
+     "link": null,
+     "shape": 7
+    },
+    {
+     "name": "system",
+     "type": "STRING",
+     "link": null,
+     "widget": {
+      "name": "system"
+     }
+    },
+    {
+     "name": "prompt",
+     "type": "STRING",
+     "link": null,
+     "widget": {
+      "name": "prompt"
+     }
+    },
+    {
+     "name": "max_length",
+     "type": "INT",
+     "link": null,
+     "widget": {
+      "name": "max_length"
+     }
+    },
+    {
+     "name": "temperature",
+     "type": "FLOAT",
+     "link": null,
+     "widget": {
+      "name": "temperature"
+     }
+    },
+    {
+     "name": "top_p",
+     "type": "FLOAT",
+     "link": null,
+     "widget": {
+      "name": "top_p"
+     }
+    },
+    {
+     "name": "top_k",
+     "type": "INT",
+     "link": null,
+     "widget": {
+      "name": "top_k"
+     }
+    },
+    {
+     "name": "seed",
+     "type": "INT",
+     "link": null,
+     "widget": {
+      "name": "seed"
+     }
+    },
+    {
+     "name": "precision",
+     "type": "COMBO",
+     "link": null,
+     "widget": {
+      "name": "precision"
+     },
+     "shape": 7
+    },
+    {
+     "name": "preload_head",
+     "type": "BOOLEAN",
+     "link": null,
+     "widget": {
+      "name": "preload_head"
+     },
+     "shape": 7
+    }
+   ],
+   "outputs": [
+    {
+     "name": "text",
+     "type": "STRING",
+     "links": [
+      3
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "ClipProjGenerate"
+   },
+   "widgets_values": [
+    "You rewrite a short user description into a MiniMax H3 video prompt. Output ONLY the rewritten prompt. No preamble, no commentary, no markdown fences, no explanation of your choices.\n\nUse exactly these sections, in this order, with these lowercase labels:\n\nsubject_definitions:\n<Subject 1> is <one sentence: who or what, distinctive appearance, clothing>\n<Subject 2> is <...>            (omit this section entirely if no recurring subject)\n\nsummary:\n<two or three sentences: what happens overall, and how the shots are joined.\nState \"Hard cuts between shots, no dissolves.\" unless the user asks otherwise.>\n\ndetailed_description:\n<one paragraph on the look: film stock or render style, lens and aperture, depth of field, grain, lighting direction and quality, colour grade, camera stability.\nKeep it consistent across every shot.>\n\n[Shot 1] 00:00.000-00:0X.XXX. <shot size and camera position. Then Action: what happens. Then Effect: any transformation or notable visual event.>\n\n[Shot 2] 00:0X.XXX-00:0Y.YYY. The video cuts directly to <shot size>. <same structure>\n\noverall_soundscape:\n<diegetic sound only, listed per shot, cutting with the picture. Name concrete sounds: footsteps, engine, water, room tone. If there is speech, specify the recording style.>\n\nnon_diegetic_music:\n<describe the score, or write exactly \"N/A - no score, no soundtrack, no musical arrangement at any point.\">\n\nRULES\n\n- Preserve the user's own terms. Translate into English when needed, but never\n  generalise: a named shape, cut, pattern, material or feature must survive as\n  the same level of detail in the output. When unsure of the exact English word,\n  stay more specific rather than less.\n\n- Choose each shot size from what has to be visible. If the description covers\n  several parts of a subject or a scene, at least one shot must be wide enough\n  to show them together. Reserve close-ups for when the subject of interest\n  genuinely is a face or a small object.\n\n- Write in English, present tense, third person.\n- Timecodes must be contiguous and cover the full duration with no gap and no overlap. Default to 10 seconds total unless the user gives a duration.\n- Default to 3 or 4 shots unless the user asks for a specific number.\n- Open each shot after the first with \"The video cuts directly to\".\n- Give every object a colour, a material and a count. Say \"a single red rubber ball\", never \"a ball\".\n- State camera movement explicitly per shot: locked off, slow push in, lateral tracking left to right, high-angle orbit, dolly out.\n- Never let an element from one shot appear in another unless the user asks for continuity.\n- Keep the whole output under 400 words.\n- Invent only what is needed to make the description filmable. Do not add characters, dialogue or story beats the user did not imply.",
+    "an old fisherman mends his net on a quay at sunrise, 10 seconds",
+    800,
+    0.7,
+    0.9,
+    50,
+    0,
+    "randomize",
+    "weights",
+    true
+   ],
+   "title": "2. Plain description in, H3 prompt out"
+  },
+  {
+   "id": 4,
+   "type": "PreviewAny",
+   "pos": [
+    930,
+    40
+   ],
+   "size": [
+    470,
+    580
+   ],
+   "flags": {},
+   "order": 4,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "source",
+     "type": "*",
+     "link": 3
+    }
+   ],
+   "outputs": [],
+   "properties": {
+    "Node name for S&R": "PreviewAny"
+   },
+   "widgets_values": []
+  }
+ ],
+ "links": [
+  [
+   1,
+   1,
+   0,
+   3,
+   0,
+   "CLIP"
+  ],
+  [
+   3,
+   3,
+   0,
+   4,
+   0,
+   "STRING"
+  ]
+ ],
+ "groups": [],
+ "config": {},
+ "extra": {
+  "ds": {
+   "scale": 0.8,
+   "offset": [
+    60,
+    560
+   ]
+  }
+ },
+ "version": 0.4
+}

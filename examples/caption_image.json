@@ -1,0 +1,347 @@
+{
+ "id": "clipproj-caption-image",
+ "revision": 0,
+ "last_node_id": 30,
+ "last_link_id": 3,
+ "nodes": [
+  {
+   "id": 30,
+   "type": "MarkdownNote",
+   "pos": [
+    40,
+    -480
+   ],
+   "size": [
+    430,
+    420
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [],
+   "properties": {
+    "Node name for S&R": "MarkdownNote"
+   },
+   "widgets_values": [
+    "## Model Links\n\nText encoder only — **no diffusion model needed** for this workflow.\n\n- [qwen3vl_4b_fp8_scaled.safetensors](https://huggingface.co/Comfy-Org/Krea-2/blob/main/text_encoders/qwen3vl_4b_fp8_scaled.safetensors) — 5.2 GB\n- [qwen3vl_4b_bf16.safetensors](https://huggingface.co/Comfy-Org/Krea-2/blob/main/text_encoders/qwen3vl_4b_bf16.safetensors) — 8.9 GB\n\n## Model Storage Location\n\n```\nComfyUI/\n└── models/\n    └── text_encoders/\n        └── qwen3vl_4b_fp8_scaled.safetensors\n```\n\n**ClipProj Device Loader** puts it on the GPU you choose — the stock\n`CLIPLoader` only offers `default` and `cpu`. No projection is involved here:\nthe matrix only matters when conditioning a diffusion model.\n\n## Why this node and not another\n\nComfyUI's `SDClipModel.generate()` drops `embeds_info` and never calls\n`build_image_inputs`, so image tokens land at linear positions instead of\nQwen3-VL's 3D mRoPE and get no DeepStack injection. The model then invents a\nplausible description of an image it never saw. This node restores the full path.\n\n## Speed\n\n**~20 tok/s on a 3090**, far below llama.cpp or vLLM: ComfyUI re-casts weights on\nevery forward, which suits diffusion but is costly one token at a time.\n`precision` and the preloaded head mitigate it.\n"
+   ],
+   "color": "#432",
+   "bgcolor": "#653"
+  },
+  {
+   "id": 1,
+   "type": "ClipProjDeviceLoader",
+   "pos": [
+    40,
+    40
+   ],
+   "size": [
+    340,
+    130
+   ],
+   "flags": {},
+   "order": 1,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "clip_name",
+     "type": "COMBO",
+     "link": null,
+     "widget": {
+      "name": "clip_name"
+     }
+    },
+    {
+     "name": "type",
+     "type": "COMBO",
+     "link": null,
+     "widget": {
+      "name": "type"
+     }
+    },
+    {
+     "name": "device",
+     "type": "COMBO",
+     "link": null,
+     "widget": {
+      "name": "device"
+     }
+    },
+    {
+     "name": "mode",
+     "type": "COMBO",
+     "link": null,
+     "widget": {
+      "name": "mode"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "name": "CLIP",
+     "type": "CLIP",
+     "links": [
+      1
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "ClipProjDeviceLoader"
+   },
+   "widgets_values": [
+    "qwen3vl_4b_fp8_scaled.safetensors",
+    "krea2",
+    "cuda:0",
+    "resident"
+   ],
+   "title": "1. Load the encoder on the GPU of your choice"
+  },
+  {
+   "id": 2,
+   "type": "LoadImage",
+   "pos": [
+    40,
+    220
+   ],
+   "size": [
+    340,
+    320
+   ],
+   "flags": {},
+   "order": 2,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "image",
+     "type": "COMBO",
+     "link": null,
+     "widget": {
+      "name": "image"
+     }
+    },
+    {
+     "name": "upload",
+     "type": "IMAGEUPLOAD",
+     "link": null,
+     "widget": {
+      "name": "upload"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      2
+     ]
+    },
+    {
+     "name": "MASK",
+     "type": "MASK",
+     "links": null
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "LoadImage"
+   },
+   "widgets_values": [
+    "example.png",
+    "image"
+   ]
+  },
+  {
+   "id": 3,
+   "type": "ClipProjGenerate",
+   "pos": [
+    420,
+    40
+   ],
+   "size": [
+    440,
+    420
+   ],
+   "flags": {},
+   "order": 3,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "clip",
+     "type": "CLIP",
+     "link": 1
+    },
+    {
+     "name": "image",
+     "type": "IMAGE",
+     "link": 2,
+     "shape": 7
+    },
+    {
+     "name": "system",
+     "type": "STRING",
+     "link": null,
+     "widget": {
+      "name": "system"
+     }
+    },
+    {
+     "name": "prompt",
+     "type": "STRING",
+     "link": null,
+     "widget": {
+      "name": "prompt"
+     }
+    },
+    {
+     "name": "max_length",
+     "type": "INT",
+     "link": null,
+     "widget": {
+      "name": "max_length"
+     }
+    },
+    {
+     "name": "temperature",
+     "type": "FLOAT",
+     "link": null,
+     "widget": {
+      "name": "temperature"
+     }
+    },
+    {
+     "name": "top_p",
+     "type": "FLOAT",
+     "link": null,
+     "widget": {
+      "name": "top_p"
+     }
+    },
+    {
+     "name": "top_k",
+     "type": "INT",
+     "link": null,
+     "widget": {
+      "name": "top_k"
+     }
+    },
+    {
+     "name": "seed",
+     "type": "INT",
+     "link": null,
+     "widget": {
+      "name": "seed"
+     }
+    },
+    {
+     "name": "precision",
+     "type": "COMBO",
+     "link": null,
+     "widget": {
+      "name": "precision"
+     },
+     "shape": 7
+    },
+    {
+     "name": "preload_head",
+     "type": "BOOLEAN",
+     "link": null,
+     "widget": {
+      "name": "preload_head"
+     },
+     "shape": 7
+    }
+   ],
+   "outputs": [
+    {
+     "name": "text",
+     "type": "STRING",
+     "links": [
+      3
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "ClipProjGenerate"
+   },
+   "widgets_values": [
+    "You are a precise image describer. Answer in English.",
+    "Describe this image in detail: subject, clothing, setting, lighting, camera framing.",
+    512,
+    0.7,
+    0.9,
+    50,
+    0,
+    "randomize",
+    "weights",
+    true
+   ],
+   "title": "2. Caption the image"
+  },
+  {
+   "id": 4,
+   "type": "PreviewAny",
+   "pos": [
+    900,
+    40
+   ],
+   "size": [
+    420,
+    420
+   ],
+   "flags": {},
+   "order": 4,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "source",
+     "type": "*",
+     "link": 3
+    }
+   ],
+   "outputs": [],
+   "properties": {
+    "Node name for S&R": "PreviewAny"
+   },
+   "widgets_values": []
+  }
+ ],
+ "links": [
+  [
+   1,
+   1,
+   0,
+   3,
+   0,
+   "CLIP"
+  ],
+  [
+   2,
+   2,
+   0,
+   3,
+   1,
+   "IMAGE"
+  ],
+  [
+   3,
+   3,
+   0,
+   4,
+   0,
+   "STRING"
+  ]
+ ],
+ "groups": [],
+ "config": {},
+ "extra": {
+  "ds": {
+   "scale": 0.8,
+   "offset": [
+    60,
+    560
+   ]
+  }
+ },
+ "version": 0.4
+}
