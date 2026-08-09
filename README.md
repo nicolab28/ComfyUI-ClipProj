@@ -15,7 +15,7 @@ ClipProj replaces it with a **Qwen3-VL-4B** (2560 dims) plus a learned linear ma
 cond = ((h - mean_in) / std_in) @ W * std_out + mean_out
 ```
 
-**15.7 GB → 8.3 GB** (5.2 GB with an fp8 encoder). The DiT, the VAEs and the sampler are untouched: the node returns an object that behaves like the official CLIP, so it drops into the existing `clip` input with no rewiring.
+**15.7 GB → 4.5 GB** with the int8_convrot encoder (8.3 GB in bf16, 5.2 GB in fp8). The DiT, the VAEs and the sampler are untouched: the node returns an object that behaves like the official CLIP, so it drops into the existing `clip` input with no rewiring.
 
 ![Full MiniMax H3 pipeline conditioned by a projected Qwen3-VL-4B](examples/minimax_h3_clipproj.png)
 
@@ -67,7 +67,7 @@ A cosine of 0.71 sounds poor and **is not** — the DiT tolerates far more than 
 - simple prompts ✅
 - structured multi-shot prompts (`subject_definitions`, timecoded shots, `overall_soundscape`) — four distinct cuts, no bleed between them ✅
 - **fl2va with first and last frame** ✅, although `W` only ever saw text positions
-- robust to swapping encoder weights: a `W` calibrated on bf16 works on an abliterated fp8 variant
+- robust to swapping encoder weights: a `W` calibrated on bf16 works on an abliterated fp8 variant, and on `int8_convrot` — whose rotation turns out to be compensated, so the activations stay in the expected frame
 
 ## Known limitations
 
