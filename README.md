@@ -53,6 +53,8 @@ Calibration is **ridge regression**, not training. No gradients, no epochs, no l
 
 ## Measured results
 
+Everything below in full, with methods, scripts and the three hypotheses that turned out wrong: **[MEASUREMENTS.md](MEASUREMENTS.md)**.
+
 MiniMax H3, tap 24 of 36, Seedance prompt corpus:
 
 | Corpus | Tokens | Cross-prompt CKA | Test cosine | Test R² |

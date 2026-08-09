@@ -74,15 +74,45 @@ def submodel(clip, name):
     return getattr(clip.cond_stage_model, name)
 
 
+# Scalaires ranges dans l'en-tete safetensors, qui ne stocke que des chaines.
+_META = {"tap": int, "d_in": int, "d_out": int, "lambda": float,
+         "cos_test": float, "r2_test": float,
+         "cond_proj_weighted": lambda v: v.lower() == "true"}
+
+
+def load_proj(path):
+    """Charge une projection, .safetensors ou .pt.
+
+    Le format safetensors range les tenseurs d'un cote et les scalaires dans
+    l'en-tete, sous forme de chaines ; ils sont reconvertis ici.
+    """
+    if not path.lower().endswith(".safetensors"):
+        return torch.load(path, map_location="cpu", weights_only=False)
+
+    from safetensors import safe_open
+    from safetensors.torch import load_file
+    data = load_file(path)
+    with safe_open(path, framework="pt") as f:
+        meta = f.metadata() or {}
+    for k, v in meta.items():
+        cast = _META.get(k)
+        try:
+            data[k] = cast(v) if cast else v
+        except (TypeError, ValueError):
+            data[k] = v
+    return data
+
+
 def main():
     for p in (TE_32B, TE_S, PROJ):
         if not os.path.isfile(p):
             log("Introuvable : %s" % p)
             return 1
 
-    proj = torch.load(PROJ, map_location="cpu", weights_only=False)
-    log("Projection : %s  (cosinus annonce %.4f)"
-        % (os.path.basename(PROJ), proj.get("cos_test", float("nan"))))
+    proj = load_proj(PROJ)
+    log("Projection : %s  (cosinus annonce %.4f, ponderee %s)"
+        % (os.path.basename(PROJ), proj.get("cos_test", float("nan")),
+           proj.get("cond_proj_weighted", False)))
     log("Eleve      : %s" % os.path.basename(TE_S))
     log("")
 
