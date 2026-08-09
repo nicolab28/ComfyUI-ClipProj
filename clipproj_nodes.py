@@ -10,8 +10,10 @@ no special tokens, with vision blocks spliced in as
 model pair validated so far.
 """
 
+import json
 import logging
 import os
+import struct
 import time
 
 import torch
@@ -21,7 +23,7 @@ import comfy.ops
 import comfy.sd
 import folder_paths
 
-from .clipproj_pinning import pin_patcher, release_all
+from .clipproj_pinning import pin_patcher, release_all, release_role
 from .clipproj_projection import (build_control, guess_cond_dim,
                                   list_projections, load_projection)
 
@@ -39,14 +41,45 @@ def gpu_devices():
     return ["cuda:%d" % i for i in range(torch.cuda.device_count())] + ["cpu"]
 
 
+# Hidden size of the vision merger output -> the CLIPType that instantiates the
+# matching Qwen3-VL architecture. Read straight from the safetensors header, so
+# quantised variants (fp8, nvfp4, int8_convrot) are recognised just the same.
+_ARCH_BY_DIM = {2560: ("krea2", "4B"), 4096: ("boogu", "8B"),
+                5120: ("minimax", "32B")}
+_MERGER_KEYS = ("model.visual.merger.linear_fc2.weight",
+                "visual.merger.linear_fc2.weight")
+
+
 def clip_types():
-    """Encoder types known to ComfyUI, with krea2 first (Qwen3-VL 4B)."""
+    """Encoder types known to ComfyUI, 'auto' first."""
     names = sorted(t.name.lower() for t in comfy.sd.CLIPType)
-    for first in ("minimax", "krea2"):
+    for first in ("minimax", "boogu", "krea2"):
         if first in names:
             names.remove(first)
             names.insert(0, first)
-    return names
+    return ["auto"] + names
+
+
+def detect_arch(path):
+    """Read the safetensors header to identify the Qwen3-VL variant.
+
+    Args:
+        path (str): path to the encoder checkpoint.
+
+    Returns:
+        tuple[str, str]|None: (clip type, human label) or None if unrecognised.
+    """
+    try:
+        with open(path, "rb") as f:
+            n = struct.unpack("<Q", f.read(8))[0]
+            header = json.loads(f.read(n))
+    except Exception:
+        return None
+    for key in _MERGER_KEYS:
+        entry = header.get(key)
+        if entry and entry.get("shape"):
+            return _ARCH_BY_DIM.get(entry["shape"][0])
+    return None
 
 
 def _submodel(clip):
@@ -132,24 +165,43 @@ class ProjectedCLIP:
         Raises:
             ValueError: if ref2va references (video / audio) are requested.
         """
-        if minimax_ref_items:
-            raise ValueError(
-                "ClipProj does not handle ref2va references (video / audio). "
-                "Those tokens are re-read at every sampling step and the "
-                "projection has not been validated in that mode.")
-
         tok = _raw_tokenizer(self._base)
         entries = []
 
         def add_text(s):
             entries.extend((t, 1.0) for t in tok(s, add_special_tokens=False)["input_ids"])
 
-        for i, img in enumerate(images):
-            add_text("<Picture %d>: " % (i + 1))
+        def add_vision(data):
             entries.append((VISION_START, 1.0))
-            entries.append(({"type": "image", "data": img,
+            entries.append(({"type": "image", "data": data,
                              "original_type": "image"}, 1.0))
             entries.append((VISION_END, 1.0))
+
+        if minimax_ref_items:
+            # ref2va. Reference tokens are re-read at every sampling step, so a
+            # projection error compounds instead of acting once — this path is
+            # experimental. Ordinals are 1-based per type, matching
+            # MiniMaxH3Tokenizer, so the prompt's <Picture i> tags line up.
+            counters = {"image": 0, "audio": 0, "video": 0}
+            for item in minimax_ref_items:
+                kind = item["type"]
+                counters[kind] = counters.get(kind, 0) + 1
+                if kind == "image":
+                    add_text("<Picture %d>: " % counters["image"])
+                    add_vision(item["data"])
+                elif kind == "audio":
+                    # Audio never enters Qwen: only its label does.
+                    add_text("<Audio %d>: " % counters["audio"])
+                else:
+                    raise ValueError(
+                        "ClipProj does not handle video references yet. They "
+                        "need the 2-frame temporal blocks of "
+                        "MiniMaxH3Tokenizer, which are not reproduced here. "
+                        "Image and audio references work.")
+        else:
+            for i, img in enumerate(images):
+                add_text("<Picture %d>: " % (i + 1))
+                add_vision(img)
         add_text(text)
 
         if len(entries) == 0:
@@ -223,6 +275,20 @@ class ProjectedCLIP:
         p = cache["p"]
 
         cond = (((h - p["mean_in"]) / p["std_in"]) @ p["W"]) * p["std_out"] + p["mean_out"]
+
+        # Token 0 is an attention sink: its direction is constant across prompts
+        # (cosine 1.0000 measured over 1966 of them) and carries no information
+        # from the text, yet its norm reaches 16 500 against 291 for a text
+        # token. Calibration excluded it — rightly, its extreme values would
+        # wreck the statistics — so W has never seen one and projects it to an
+        # arbitrary direction with a huge norm. That is invisible on a 200-token
+        # prompt where it is 0.5 % of the positions, and ruinous on a 7-token one
+        # where it is 14 %. Since the vector is constant, substituting its
+        # measured value is exact rather than approximate.
+        sink = proj.get("sink_out")
+        if sink is not None and cond.shape[1] > 0:
+            cond[:, 0] = sink.to(device=cond.device, dtype=cond.dtype)
+
         cond = cond.to(mm.intermediate_device())
         tags = tags_from_embeds_info(cond.shape[1], captured.get("embeds_info", []))
         return cond, tags
@@ -286,8 +352,31 @@ def _load_encoder(clip_name, clip_type, device, mode, unique_id):
     """
     path = folder_paths.get_full_path_or_raise("text_encoders", clip_name)
     dev = torch.device(device)
-    ctype = getattr(comfy.sd.CLIPType, clip_type.upper(), comfy.sd.CLIPType.KREA2)
     embeddings = folder_paths.get_folder_paths("embeddings")
+
+    # Identity of a loaded instance. The filename alone is not enough: moving the
+    # same checkpoint to another card, or switching residency mode, produces a
+    # different resident object that must replace the previous one. Everything
+    # that changes what sits in VRAM belongs in this key.
+    key = "%s@%s:%s" % (clip_name, device, mode)
+
+    # Release whatever this node held BEFORE loading the replacement. Doing it
+    # afterwards means both encoders sit in VRAM at once, and on a tight card the
+    # load fails before the release ever runs. No-op when the key is unchanged.
+    role = "ClipProj:%s" % unique_id
+    release_role(role, key=key)
+
+    label = ""
+    if clip_type == "auto":
+        found = detect_arch(path)
+        if found is None:
+            raise ValueError(
+                "Could not identify the architecture of %s. It may not be a "
+                "Qwen3-VL checkpoint. Pick the type by hand: krea2 for a 4B, "
+                "boogu for an 8B, minimax for the 32B." % clip_name)
+        clip_type, label = found
+        label = " [%s detected]" % label
+    ctype = getattr(comfy.sd.CLIPType, clip_type.upper(), comfy.sd.CLIPType.KREA2)
 
     if mode == "resident":
         clip = comfy.sd.load_clip(
@@ -295,15 +384,15 @@ def _load_encoder(clip_name, clip_type, device, mode, unique_id):
             model_options={"load_device": dev, "offload_device": dev},
             disable_dynamic=True)
         mm.load_models_gpu([clip.patcher], force_full_load=True)
-        pin_patcher(clip.patcher, "encoder %s" % clip_name,
-                    role="ClipProj:%s" % unique_id, key=clip_name)
+        pin_patcher(clip.patcher, "encoder %s on %s" % (clip_name, device),
+                    role=role, key=key)
     else:
         clip = comfy.sd.load_clip(
             ckpt_paths=[path], embedding_directory=embeddings, clip_type=ctype,
             model_options={"load_device": dev,
                            "offload_device": mm.text_encoder_offload_device()})
-    logging.info("[ClipProj] %s (%s) loaded in %s mode on %s: %.2f GB", clip_name,
-                 clip_type, mode, dev, clip.patcher.model_size() / 1024 ** 3)
+    logging.info("[ClipProj] %s (%s%s) loaded in %s mode on %s: %.2f GB", clip_name,
+                 clip_type, label, mode, dev, clip.patcher.model_size() / 1024 ** 3)
     return clip
 
 
@@ -324,7 +413,10 @@ class ClipProjDeviceLoader:
         return {
             "required": {
                 "clip_name": (folder_paths.get_filename_list("text_encoders"),),
-                "type": (clip_types(), {"tooltip": "krea2 for a Qwen3-VL 4B"}),
+                "type": (clip_types(), {
+                    "default": "auto",
+                    "tooltip": "auto reads the checkpoint header and picks the "
+                               "matching architecture."}),
                 "device": (gpu_devices(), {"tooltip": "GPU that receives the encoder"}),
                 "mode": (["resident", "streaming", "dynamic"],
                          {"default": "resident", "tooltip": MODE_TOOLTIP}),
@@ -377,8 +469,10 @@ class ClipProjLoader:
                 "clip_name": (folder_paths.get_filename_list("text_encoders"), {
                     "tooltip": "Small encoder, for example a Qwen3-VL-4B"}),
                 "type": (clip_types(), {
-                    "tooltip": "Architecture to instantiate: krea2 for a "
-                               "Qwen3-VL-4B (2560 dims), boogu for a 8B (4096)"}),
+                    "default": "auto",
+                    "tooltip": "auto reads the checkpoint header and picks the "
+                               "matching architecture. Override only if that "
+                               "fails: krea2 = 4B, boogu = 8B, minimax = 32B."}),
                 "projection": (list_projections(), {
                     "tooltip": "Learned matrix, or a <control:...> reference"}),
                 "device": (gpu_devices(), {"tooltip": "GPU that receives the encoder"}),
@@ -487,6 +581,15 @@ class ClipProjGenerate:
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF}),
             },
             "optional": {
+                "repetition_penalty": ("FLOAT", {
+                    "default": 1.05, "min": 1.0, "max": 2.0, "step": 0.01,
+                    "tooltip": "Discourages tokens already produced, which is what "
+                               "breaks an answer that locks into a repeating "
+                               "phrase. Only applies while sampling: at "
+                               "temperature 0 ComfyUI takes the most likely token "
+                               "outright and ignores this. To cure a loop, raise "
+                               "temperature to about 0.3 first, then this towards "
+                               "1.2."}),
                 "image": ("IMAGE", {"tooltip": "Image to describe (optional)"}),
                 "precision": (["weights", "float16", "bfloat16", "float32"], {
                     "default": "weights",
@@ -509,7 +612,8 @@ class ClipProjGenerate:
                    "weights. Noticeably slower than a dedicated engine.")
 
     def generate(self, clip, system, prompt, max_length, temperature, top_p, top_k,
-                 seed, image=None, precision="weights", preload_head=True):
+                 seed, image=None, precision="weights", preload_head=True,
+                 repetition_penalty=1.05):
         """Generate text from a prompt and, if given, an image.
 
         Returns:
@@ -591,7 +695,7 @@ class ClipProjGenerate:
                         embeds=embeds, do_sample=temperature > 0.0,
                         max_length=max_length, temperature=temperature,
                         top_k=top_k, top_p=top_p, min_p=0.0,
-                        repetition_penalty=1.0, seed=seed,
+                        repetition_penalty=repetition_penalty, seed=seed,
                         position_ids=pos_ids, visual_pos_masks=vis_masks,
                         deepstack_embeds=deepstack, embeds_info=embeds_info,
                         execution_dtype=exec_dtype)

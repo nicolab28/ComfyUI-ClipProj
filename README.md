@@ -2,7 +2,7 @@
 
 **Swap a large text encoder for a small one, with a learned linear projection.**
 
-**Version 0.1.0**
+**Version 0.1.1** — if you installed 0.1.0, **re-download the matrices too**: they were missing the attention-sink vector, which broke short prompts. See [Changes in 0.1.1](#changes-in-011).
 
 > ## ⚠️ Proof of concept — working, but a proof of concept
 > **It runs and it produces good video**, and every number below was measured on real hardware rather than estimated. It is still a proof of concept, not a finished product: built and tested on a single setup — **Windows 11, NVIDIA, ComfyUI 0.31.0** — with deliberately limited exploration. Expect rough edges and breaking changes. **Use at your own risk.**
@@ -69,19 +69,33 @@ A cosine of 0.71 sounds poor and **is not** — the DiT tolerates far more than 
 - **fl2va with first and last frame** ✅, although `W` only ever saw text positions
 - robust to swapping encoder weights: a `W` calibrated on bf16 works on an abliterated fp8 variant, and on `int8_convrot` — whose rotation turns out to be compensated, so the activations stay in the expected frame
 
+## Changes in 0.1.1
+
+**The attention-sink vector is now substituted at inference, and this one matters.** The first token of a sequence is an attention sink: its direction is constant from one prompt to the next — cosine 1.0000 measured over 1966 prompts — and it carries nothing from the text, yet its norm reaches 16 500 against 291 for a text token. Calibration excluded it, rightly, since its extreme values would wreck the statistics. But the node projected it anyway, through a matrix that had never seen one, producing an arbitrary vector of enormous norm. That is invisible on a 200-token prompt where it is 0.5 % of the positions, and ruinous on a 7-token one where it is 14 % — which is exactly the short-prompt breakage people hit. Because the vector is constant, substituting its measured value is exact rather than approximate. **Re-download the matrices**: the fix lives in them.
+
+**ref2va now works** and is no longer refused. Load the encoder in `resident` mode for it: the `dynamic` path crashes inside ComfyUI's vision tower with int8 encoders, and that only surfaces when an image is present.
+
+**Encoder architecture is detected automatically** from the checkpoint header, so `type` can stay on `auto` instead of guessing between `krea2`, `boogu` and `minimax`.
+
+**Encoder swapping frees properly.** The previous model is released *before* the replacement loads, rather than after, so a tight card no longer fails mid-swap. A loaded instance is now identified by file, device *and* mode, so changing card or residency releases the old one. And a loader re-run by ComfyUI's cache no longer stacks a second copy of the same checkpoint in VRAM.
+
+**`repetition_penalty` is exposed** on the Generate node. Note it only applies while sampling: at temperature 0 ComfyUI takes the most likely token outright and ignores it.
+
 ## Known limitations
 
 The 4B holds up **well enough** on everything tried so far — but the trials were not pushed far, and the honest summary is that **you lose knowledge the 32B has**.
 
-**Named references disappear.** Some real people come through, others do not: in testing, one well-known actor rendered correctly while another was simply absent, replaced by a generic figure. The same almost certainly applies to landmarks, artworks, brands, film styles and any other named reference — a 4B stores far fewer facts than a 32B, and no projection can restore knowledge that was never encoded in the first place. We did not map which references survive; assume any proper noun is at risk.
+**Named references depend on the encoder, not on the projection.** This is measured rather than guessed: asking the encoder to describe a person in plain text bypasses the matrix entirely and shows where the knowledge actually stops. The 4B places Scarlett Johansson correctly as Black Widow but believes she has dark brown hair; the 8B describes her correctly as blonde with blue eyes. When a proper noun renders as the wrong person, question the encoder first — `calibration/knows.py` runs that test for any name, via the `H3_NAMES` environment variable.
 
-Whether this is the small model's ceiling or something the matrix loses is still open. A quick test settles it for a given name: ask the encoder itself, in plain text, to describe that person or place. If the answer is vague, the knowledge is not there and no better matrix will help.
+The workaround is to describe rather than name: *"the actress X as [role], blonde, ..."* recovers an identity the bare name loses, on both models. A name is a fragile signal carried by two or three tokens; a description spreads it over a dozen redundant ones and the reconstruction error averages out instead of accumulating. None of this applies to **ref2va**, where identity comes from the reference image.
+
+**Speech in languages other than English degrades.** Reproduced with French: the 32B pronounces it cleanly, a projected 4B or 8B does not. It is not a corpus problem — on identical English prompts differing only in the quoted line, French tokens reconstruct at 0.8974 against 0.8996 for English, which is noise. A cosine of 0.90 is ample for visual semantics and insufficient for phonetics: the DiT's audio branch is far more demanding than its image branch, and a language the model handles less confidently has less margin to absorb the error.
 
 **Other known gaps:**
 
-- **ref2va** (video / audio references) is untested and refused by the node
-- image references work in **fl2va**, but `W` was calibrated on text positions only, so vision positions are projected out of their training distribution
+- image references work in **fl2va** and **ref2va**, but `W` was calibrated on text positions only, so vision positions are projected out of their training distribution
 - the linear projection is **at its ceiling**: eight times more calibration data bought 1.8 % of cosine. Going further needs an MLP, not more prompts
+- quantisation costs facts: `int8_convrot` against `bf16` shows measurable factual errors appearing, fine for general use, worth knowing for prompts that lean on proper nouns
 
 ## Control matrices — run these first
 
@@ -148,13 +162,22 @@ See `calibration/`:
 |---|---|
 | `probe.py` | CKA probe — is the information even present? Run before anything else |
 | `run.py` | full calibration, produces the `.pt` |
+| `add_sink.py` | measures the attention-sink vector and writes it into existing matrices |
 | `make_controls.py` | builds the zero / identity control matrices |
 | `test_node.py` | end-to-end check without launching ComfyUI |
+| `knows.py` | asks the encoder to describe a name in plain text, bypassing the matrix |
+| `length.py` | reconstruction fidelity as a function of prompt length |
+| `language.py` | reconstruction fidelity of a non-English line against its English twin |
 
-Two traps worth knowing, both of which cost real time to find:
+Every path is an environment variable with a sensible default; read the docstring at the top of each script.
 
-1. **Massive activations.** Token 0 (the attention sink) and 5–14 dimensions out of 5120 carry values hundreds of times the standard deviation. Left alone they saturate any linear similarity measure — CKA reads 0.9999 across twenty consecutive layers and means nothing. Drop the sink and standardise per dimension.
+The last three exist because a projection can be blamed for things it does not do. Before assuming the matrix is at fault, check whether the encoder knows the fact at all (`knows.py`), whether short prompts are genuinely worse (`length.py` — they are barely), and whether another language reconstructs worse (`language.py` — it does not). All three hypotheses looked obvious and all three were wrong.
+
+Three traps worth knowing, each of which cost real time to find:
+
+1. **Massive activations.** Token 0 (the attention sink) and 5–14 dimensions out of 5120 carry values hundreds of times the standard deviation. Left alone they saturate any linear similarity measure — CKA reads 0.9999 across twenty consecutive layers and means nothing. Drop the sink and standardise per dimension — then substitute its measured value at inference, or short prompts break.
 2. **Lexical identity.** CKA measured *within* a prompt is inflated by both models sharing a tokenizer. Measure **across prompts** (one mean vector per prompt).
+3. **A regularisation optimum on the edge of the grid is not an optimum.** If the retained lambda is the largest value tried, the real one is beyond it and the matrix is under-fitted. `run.py` now warns.
 
 ## Credits
 

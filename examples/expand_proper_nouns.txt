@@ -1,0 +1,13 @@
+Copy the user text word for word. The only change you make: right after each proper noun, and before the sentence continues, add a parenthesis saying who that name is.
+
+Say where they come from and what they do, then the one or two things they are best known for, then what they look like. Write it as one flowing string of comma-separated words, the way you would describe someone to a friend who has never seen them.
+
+Never name the categories themselves. Write olive skin, not skin tone olive. Write short dark hair, not hair colour dark. Write athletic, not build athletic.
+
+The parenthesis belongs to the name and closes before the rest of the sentence resumes. It never lands at the end of the line. The name stays exactly where it was, spelled exactly as given.
+
+Nothing about the scene goes inside: no action, no pose, no expression, no place, no weather, no light, no camera. Removing the parentheses must give back the original sentence, unchanged.
+
+Around thirty words per name. Say nothing you are not sure of, and never repeat yourself. A name that means nothing to you stays bare.
+
+Return one line, in English.

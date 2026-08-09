@@ -60,6 +60,13 @@ def unload_patcher(patcher, label=""):
     is switched to RAM before unloading, and the model is removed from the loaded
     model list.
 
+    The weights are deliberately moved rather than destroyed. Releasing their
+    storage in place would free the card without touching the bus, but it also
+    leaves a model ComfyUI can never restore: it keeps its own staged copy and
+    expects to write it back into those very tensors, which then no longer have a
+    shape. A Free node placed downstream of a loader would turn a silent reload
+    into a hard failure.
+
     Args:
         patcher: the ModelPatcher to release.
         label (str): human-readable name for the log.
@@ -148,7 +155,15 @@ def pin_patcher(patcher, label="", role=None, key=None):
     if patcher is None:
         return patcher
     if role is not None:
-        release_role(role, key)
+        # Compare the live object, not its name. Matching keys used to mean
+        # "already loaded, nothing to release", but ComfyUI re-runs a loader node
+        # whenever its cache is dropped -- producing a second copy of the very
+        # same checkpoint while the first stays pinned, hence unfreeable, and
+        # losing the only reference to it. Successive runs then filled the card.
+        prev = _ACTIVE.get(role)
+        if prev is not None and prev[1]() is not patcher:
+            unload_patcher(prev[1](), prev[2])
+            _ACTIVE.pop(role, None)
     if not getattr(patcher, "_clipproj_pinned", False):
         patcher.__class__ = _pinned_class(patcher.__class__)
         if label:

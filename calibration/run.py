@@ -21,36 +21,70 @@ import gc
 import hashlib
 import json
 import os
-
-# Defaults derived from this file's location: calibration/ lives inside the
-# custom node, itself inside ComfyUI/custom_nodes/.
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_COMFY = os.path.abspath(os.path.join(_HERE, '..', '..', '..'))
 import sys
 import time
 
 sys.argv = [sys.argv[0]]
 
-COMFY_DIR = os.environ.get("H3_COMFY_DIR", _COMFY)
-TE_DIR = os.environ.get("H3_TE_DIR", os.path.join(_COMFY, "models", "text_encoders"))
-OUT_DIR = os.environ.get("H3_OUT_DIR", os.path.join(_HERE, "out"))
-PROMPT_FILE = os.environ.get("H3_PROMPTS", os.path.join(_HERE, "out", "prompts.txt"))
+COMFY_DIR = os.environ.get("H3_COMFY_DIR", r"D:\ComfyUI-Launcher\ComfyUI_270\ComfyUI")
+TE_DIR = os.environ.get("H3_TE_DIR", r"D:\ComfyUI-Launcher\_models\text_encoders")
+OUT_DIR = os.environ.get("H3_OUT_DIR", r"D:\tmp\h3_probe_out")
+PROMPT_FILE = os.environ.get("H3_PROMPTS", r"D:\tmp\h3_prompts.txt")
 
 N_TRAIN = int(os.environ.get("H3_N_TRAIN", "300"))
 N_TEST = int(os.environ.get("H3_N_TEST", "60"))
 MAX_TOKENS = int(os.environ.get("H3_MAX_TOKENS", "320"))
 MIN_WORDS = 15
-LAMBDAS = [1e1, 1e2, 1e3, 1e4]
+# Grille de regularisation. Elle doit rester assez large pour que l'optimum
+# tombe a l'interieur : un lambda retenu sur le bord signifie que la vraie valeur
+# est au-dela et que la matrice est mal reglee. Le 8B non pondere avait retenu
+# 1e4, l'ancien maximum -- sa calibration etait donc a refaire.
+LAMBDAS = [float(x) for x in os.environ.get(
+    "H3_LAMBDAS", "1e1,1e2,1e3,1e4,1e5,1e6,1e7").split(",")]
 
 TE_32B = os.path.join(TE_DIR, os.environ.get(
     "H3_TE_32B", "qwen3vl_32b_heretic_minimax_h3_nvfp4.safetensors"))
 TE_4B = os.path.join(TE_DIR, os.environ.get("H3_TE_4B", "qwen3vl_4b_bf16.safetensors"))
+
+# Type de CLIP du modele eleve : il determine l'architecture instanciee.
+# krea2 -> Qwen3-VL-4B (2560 dims), boogu -> Qwen3-VL-8B (4096 dims).
+# Le tap et la normalisation sont forces ensuite, donc seul compte ici le fait
+# que ComfyUI construise le bon squelette.
+STUDENT_TYPE = os.environ.get("H3_STUDENT_TYPE", "krea2")
+
+# Accumulation des matrices normales. Sur GPU en float32 elle est environ 350x
+# plus rapide qu'en float64 sur CPU et c'est de loin l'etape dominante ; la
+# resolution reste en float64 quoi qu'il arrive. Mettre H3_ACC_DEVICE=cpu et
+# H3_ACC_DTYPE=float64 pour retrouver l'ancien comportement et comparer.
+ACC_DEVICE = os.environ.get("H3_ACC_DEVICE", "cuda")
+ACC_DTYPE = {"float32": None, "float64": None}  # rempli apres l'import de torch
+
+# Permet de n'exploiter qu'un debut du corpus deja encode par le 32B, sans
+# refaire la phase la plus longue. 0 = tout le corpus.
+LIMIT = int(os.environ.get("H3_LIMIT", "0"))
+
+# Calibration ponderee par condition_proj. Le DiT ne consomme pas le
+# conditionnement tel quel : il lui applique d'abord un Linear(5120 -> 5376) dont
+# le spectre est tres etale (rapport 45 entre le decile haut et le decile bas des
+# valeurs singulieres, 52 % de l'energie sur 10 % des directions). Sans en tenir
+# compte, la ridge depense autant d'effort a reconstruire une direction que le
+# DiT multipliera par 0,10 qu'une qu'il multipliera par 37.
+#
+# On calibre donc contre les cibles PASSEES par cette couche, puis on ramene le
+# resultat en 5120 par pseudo-inverse -- la couche etant injective, l'aller-retour
+# ne perd rien. La sortie reste un conditionnement standard et le DiT n'est pas
+# modifie ; seule la metrique d'erreur change.
+COND_PROJ = os.environ.get("H3_COND_PROJ", "")
 
 sys.path.insert(0, COMFY_DIR)
 
 import torch  # noqa: E402
 import comfy.sd  # noqa: E402
 import comfy.model_management as mm  # noqa: E402
+
+ACC_DTYPE = getattr(torch, os.environ.get("H3_ACC_DTYPE", "float32"))
+if ACC_DEVICE.startswith("cuda") and not torch.cuda.is_available():
+    ACC_DEVICE = "cpu"
 
 DROP_FIRST = 1  # token d'attention sink
 
@@ -132,9 +166,14 @@ def encode_target(clip32, ids):
     return out[0][0].float().cpu()
 
 
-def setup_4b(clip4):
-    """Configure le 4B pour restituer toutes les couches brutes."""
-    sm = submodel(clip4, "qwen3vl_4b")
+def setup_student(clip):
+    """Configure le modele eleve pour restituer toutes les couches brutes.
+
+    Le nom du sous-modele depend de l'architecture (qwen3vl_4b, qwen3vl_8b...),
+    il est donc lu sur l'objet plutot que code en dur.
+    """
+    name = getattr(clip.cond_stage_model, "clip", None)
+    sm = submodel(clip, name)
     sm.layer = "all"
     sm.layer_idx = None
     sm.layer_norm_hidden_state = False
@@ -149,6 +188,40 @@ def encode_source(sm, ids):
     if z.dim() == 4:
         z = z[0]
     return z.float().cpu()
+
+
+def load_cond_proj(path, device):
+    """Charge condition_proj depuis un checkpoint de DiT MiniMax H3.
+
+    Returns:
+        tuple[torch.Tensor, torch.Tensor]: (Wc [5376, 5120], pseudo-inverse de
+        Wc.T [5376, 5120]) sur `device`. Le biais est ignore : constant, il
+        s'annule entre la cible et la prediction.
+    """
+    from safetensors.torch import load_file
+    sd = load_file(path)
+    key = next(k for k in sd if k.endswith("condition_proj.weight"))
+    wc = sd[key].float()
+    log("  condition_proj : %s depuis %s" % (tuple(wc.shape), os.path.basename(path)))
+    pinv = torch.linalg.pinv(wc.T.double()).float()   # [5376, 5120]
+    return wc.to(device), pinv.to(device)
+
+
+def back_to_cond_space(w, my, sdy, pinv):
+    """Ramene une solution apprise en 5376 vers l'espace 5120 attendu par le DiT.
+
+    La transformation apprise vaut cond5376 = xs @ W * sdy + my, ou xs est
+    l'entree standardisee. On veut cond5120 tel que cond5120 @ Wc.T = cond5376,
+    d'ou cond5120 = cond5376 @ pinv. L'echelle de sortie est absorbee dans la
+    matrice, il ne reste donc qu'un ecart-type unitaire.
+
+    Returns:
+        tuple: (W [d_in, 5120], mean_out [5120], std_out [5120]).
+    """
+    pinv64 = pinv.double().cpu()
+    w_out = (w * sdy.unsqueeze(0)) @ pinv64
+    mean_out = my @ pinv64
+    return w_out, mean_out, torch.ones_like(mean_out)
 
 
 def linear_cka(x, y):
@@ -168,15 +241,28 @@ class Accumulator:
 
     Stocke X'X, X'Y ainsi que les sommes et sommes de carres necessaires au
     centrage-reduction, sans jamais conserver les activations elles-memes.
+
+    Deux precisions distinctes, parce que les deux etapes n'ont pas les memes
+    exigences :
+
+      - l'accumulation est une somme de produits, faite ACC_DEVICE / ACC_DTYPE.
+        Sur GPU en float32 elle est environ 350 fois plus rapide qu'en float64
+        sur CPU, et c'est elle qui domine tout le temps de calcul.
+      - la resolution, elle, inverse une matrice potentiellement mal
+        conditionnee : elle se fait toujours en float64, sur des matrices deja
+        reduites donc peu couteuses.
     """
 
-    def __init__(self, d_in, d_out):
-        self.xtx = torch.zeros(d_in, d_in, dtype=torch.float64)
-        self.xty = torch.zeros(d_in, d_out, dtype=torch.float64)
-        self.sx = torch.zeros(d_in, dtype=torch.float64)
-        self.sx2 = torch.zeros(d_in, dtype=torch.float64)
-        self.sy = torch.zeros(d_out, dtype=torch.float64)
-        self.sy2 = torch.zeros(d_out, dtype=torch.float64)
+    def __init__(self, d_in, d_out, device=None, dtype=None):
+        dev = device or ACC_DEVICE
+        dt = dtype or ACC_DTYPE
+        self.dev, self.dt = dev, dt
+        self.xtx = torch.zeros(d_in, d_in, dtype=dt, device=dev)
+        self.xty = torch.zeros(d_in, d_out, dtype=dt, device=dev)
+        self.sx = torch.zeros(d_in, dtype=dt, device=dev)
+        self.sx2 = torch.zeros(d_in, dtype=dt, device=dev)
+        self.sy = torch.zeros(d_out, dtype=dt, device=dev)
+        self.sy2 = torch.zeros(d_out, dtype=dt, device=dev)
         self.n = 0
 
     def add(self, x, y):
@@ -186,7 +272,8 @@ class Accumulator:
             x (torch.Tensor): [n, d_in]
             y (torch.Tensor): [n, d_out]
         """
-        xd, yd = x.double(), y.double()
+        xd = x.to(device=self.dev, dtype=self.dt)
+        yd = y.to(device=self.dev, dtype=self.dt)
         self.xtx += xd.T @ xd
         self.xty += xd.T @ yd
         self.sx += xd.sum(0)
@@ -195,12 +282,16 @@ class Accumulator:
         self.sy2 += (yd * yd).sum(0)
         self.n += x.shape[0]
 
+    def _f64(self, t):
+        """Ramene un tenseur accumule en float64 sur CPU, pour la resolution."""
+        return t.to(device="cpu", dtype=torch.float64)
+
     def moments(self):
         """Retourne (mean_x, std_x, mean_y, std_y) du corpus accumule."""
-        mx = self.sx / self.n
-        sdx = (self.sx2 / self.n - mx * mx).clamp_min(1e-12).sqrt()
-        my = self.sy / self.n
-        sdy = (self.sy2 / self.n - my * my).clamp_min(1e-12).sqrt()
+        mx = self._f64(self.sx) / self.n
+        sdx = (self._f64(self.sx2) / self.n - mx * mx).clamp_min(1e-12).sqrt()
+        my = self._f64(self.sy) / self.n
+        sdy = (self._f64(self.sy2) / self.n - my * my).clamp_min(1e-12).sqrt()
         return mx, sdx, my, sdy
 
     def solve(self, lam):
@@ -211,9 +302,11 @@ class Accumulator:
         """
         mx, sdx, my, sdy = self.moments()
         n = self.n
+        xtx = self._f64(self.xtx)
+        xty = self._f64(self.xty)
         # Covariances centrees, puis mise a l'echelle par les ecarts-types.
-        cxx = (self.xtx - n * torch.outer(mx, mx)) / (torch.outer(sdx, sdx) * n)
-        cxy = (self.xty - n * torch.outer(mx, my)) / (torch.outer(sdx, sdy) * n)
+        cxx = (xtx - n * torch.outer(mx, mx)) / (torch.outer(sdx, sdx) * n)
+        cxy = (xty - n * torch.outer(mx, my)) / (torch.outer(sdx, sdy) * n)
         d = cxx.shape[0]
         w = torch.linalg.solve(cxx + lam / n * torch.eye(d, dtype=torch.float64), cxy)
         return w, mx, sdx, my, sdy
@@ -286,19 +379,37 @@ def main():
         torch.save({"ids": ids_all, "targets": targets, "sig": sig}, cache)
         log("  cible sauvegardee : %s (%d tokens)" % (cache, ntok))
 
+    if LIMIT and LIMIT < len(ids_all):
+        # Tronque APRES le cache : la signature porte sur le corpus complet, donc
+        # l'encodage 32B deja fait reste utilisable tel quel.
+        keep_tr = max(8, int(LIMIT * n_train / len(ids_all)))
+        keep_te = LIMIT - keep_tr
+        idx = list(range(keep_tr)) + list(range(n_train, n_train + keep_te))
+        ids_all = [ids_all[i] for i in idx]
+        targets = [targets[i] for i in idx]
+        allp = [allp[i] for i in idx]
+        n_train = keep_tr
+        test = allp[keep_tr:]
+        log("  corpus limite a %d prompts (%d train / %d test)"
+            % (len(ids_all), n_train, len(test)))
+
     log("")
     log("=" * 78)
     log("PHASE 2 : encodage 4B + accumulation")
     log("=" * 78)
     t_load4 = time.time()
-    clip4 = load_te(TE_4B, comfy.sd.CLIPType.KREA2, "4B")
+    clip4 = load_te(TE_4B, getattr(comfy.sd.CLIPType, STUDENT_TYPE.upper()), "eleve")
     t_load4 = time.time() - t_load4
     t_enc4 = time.time()
-    sm = setup_4b(clip4)
+    sm = setup_student(clip4)
+
+    wc = pinv = None
+    if COND_PROJ:
+        wc, pinv = load_cond_proj(COND_PROJ, ACC_DEVICE)
 
     probe = encode_source(sm, ids_all[0])
     n_taps, d_in = probe.shape[0], probe.shape[2]
-    d_out = targets[0].shape[1]
+    d_out = targets[0].shape[1] if wc is None else wc.shape[0]
     taps = list(range(0, n_taps, 3))
     if n_taps - 1 not in taps:
         taps.append(n_taps - 1)
@@ -318,6 +429,8 @@ def main():
         if n - DROP_FIRST < 4:
             continue
         yv = y[sl]
+        if wc is not None:
+            yv = (yv.to(ACC_DEVICE) @ wc.T).cpu()
         if i < n_train:
             for k in taps:
                 accs[k].add(x[k][sl], yv)
@@ -375,6 +488,16 @@ def main():
     log("")
     log("  Meilleur tap : %d  (cosinus test %.4f, R2 %.4f, CKA inter-prompts %.4f)"
         % (top["tap"], top["cos_test"], top["r2_test"], top["cka_inter_prompt"]))
+
+    # Un lambda retenu a l'extremite de la grille n'est pas un optimum : le vrai
+    # se trouve au-dela. La matrice est alors sous-reglee et ses metriques ne
+    # valent rien. Elargir H3_LAMBDAS et relancer.
+    if top["lambda"] in (LAMBDAS[0], LAMBDAS[-1]) and len(LAMBDAS) > 1:
+        bord = "basse" if top["lambda"] == LAMBDAS[0] else "haute"
+        log("")
+        log("  ATTENTION : lambda %.0e est la borne %s de la grille." % (top["lambda"], bord))
+        log("  L'optimum est hors grille, la calibration est a refaire avec une")
+        log("  grille elargie (variable H3_LAMBDAS).")
     log("")
     log("  Lecture du cosinus test (jeu disjoint, biais lexical elimine) :")
     log("    > 0.95  une simple matrice suffit -- passer au custom node")
@@ -384,6 +507,11 @@ def main():
     # Sauvegarde de la projection du meilleur tap, prete a etre rechargee par un
     # custom node : cond_32B ~= ((h_4B - mx) / sdx) @ W * sdy + my
     w, mx, sdx, my, sdy = accs[top["tap"]].solve(top["lambda"])
+    if pinv is not None:
+        w, my, sdy = back_to_cond_space(w, my, sdy, pinv)
+        d_out = w.shape[1]
+        log("  solution ramenee en %d dims via la pseudo-inverse de condition_proj"
+            % d_out)
     src = os.path.splitext(os.path.basename(TE_4B))[0]
     proj_path = os.path.join(OUT_DIR, "h3_proj_%s_tap%d.pt" % (src, top["tap"]))
     torch.save({"W": w.float(), "mean_in": mx.float(), "std_in": sdx.float(),
@@ -395,6 +523,7 @@ def main():
                 # un autre encodeur est charge.
                 "source_model": os.path.basename(TE_4B),
                 "target_model": os.path.basename(TE_32B),
+                "cond_proj_weighted": bool(COND_PROJ),
                 "n_train_prompts": n_train,
                 "n_train_tokens": accs[taps[0]].n}, proj_path)
 
