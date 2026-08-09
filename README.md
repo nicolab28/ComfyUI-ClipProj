@@ -17,6 +17,10 @@ cond = ((h - mean_in) / std_in) @ W * std_out + mean_out
 
 **15.7 GB → 8.3 GB** (5.2 GB with an fp8 encoder). The DiT, the VAEs and the sampler are untouched: the node returns an object that behaves like the official CLIP, so it drops into the existing `clip` input with no rewiring.
 
+![Full MiniMax H3 pipeline conditioned by a projected Qwen3-VL-4B](examples/minimax_h3_clipproj.png)
+
+*The complete pipeline — encoder, projection, conditioning, sampling, decode and video output. `examples/minimax_h3_clipproj.json`*
+
 ## Installation
 
 ```bash
@@ -104,6 +108,14 @@ Three synthetic matrices are selectable in the node. They exist to prove that `W
 The stock `CLIPLoader` only offers `default` and `cpu` for its device, so there is no way to target a specific card on a multi-GPU machine. That is why the loaders exist.
 
 `Generate / Caption` exists because ComfyUI's `SDClipModel.generate` drops `embeds_info` and never calls `build_image_inputs`: image tokens end up at linear positions instead of Qwen3-VL's 3D mRoPE and without DeepStack injection, which makes captioning fail. This node restores the full path.
+
+![Turning a one-line description into a structured H3 prompt](examples/rewrite_h3_prompt.png)
+
+*"an old fisherman mends his net on a quay at sunrise, 10 seconds" in, a full three-shot H3 prompt out. `examples/rewrite_h3_prompt.json`*
+
+![Captioning an image on the same resident weights](examples/caption_image.png)
+
+*Image captioning, no second model loaded. `examples/caption_image.json`*
 
 Generation is **far slower than a dedicated engine** (llama.cpp, vLLM). ComfyUI's ops re-cast weights on every forward — sound for diffusion, costly when decoding one token at a time. Two mitigations are exposed (`precision`, `preload_head`); expect around 20 tok/s on a 3090. For heavy use, prefer a real inference server.
 
