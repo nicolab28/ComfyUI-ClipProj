@@ -2,7 +2,7 @@
 
 **Swap a large text encoder for a small one, with a learned linear projection.**
 
-**Version 0.1.1** — if you installed 0.1.0, **re-download the matrices too**: they were missing the attention-sink vector, which broke short prompts. See [Changes in 0.1.1](#changes-in-011).
+**Version 0.1.2** — matrices are now `.safetensors`; `.pt` is still read but no longer distributed, since pickle can execute code on load.
 
 > ## ⚠️ Proof of concept — working, but a proof of concept
 > **It runs and it produces good video**, and every number below was measured on real hardware rather than estimated. It is still a proof of concept, not a finished product: built and tested on a single setup — **Windows 11, NVIDIA, ComfyUI 0.31.0** — with deliberately limited exploration. Expect rough edges and breaking changes. **Use at your own risk.**
@@ -68,6 +68,10 @@ A cosine of 0.71 sounds poor and **is not** — the DiT tolerates far more than 
 - structured multi-shot prompts (`subject_definitions`, timecoded shots, `overall_soundscape`) — four distinct cuts, no bleed between them ✅
 - **fl2va with first and last frame** ✅, although `W` only ever saw text positions
 - robust to swapping encoder weights: a `W` calibrated on bf16 works on an abliterated fp8 variant, and on `int8_convrot` — whose rotation turns out to be compensated, so the activations stay in the expected frame
+
+## Changes in 0.1.2
+
+**Matrices are read from `.safetensors`.** A `.pt` goes through pickle, which can execute arbitrary code the moment it is opened — an absurd risk for a file holding nothing but tensors and a handful of scalars. The scalars now live in the safetensors header, which stores strings, and are converted back on load. Legacy `.pt` files are still accepted so nothing breaks, but the published matrices are safetensors only. `calibration/to_safetensors.py` converts your own, verifying each tensor before it returns.
 
 ## Changes in 0.1.1
 
