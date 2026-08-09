@@ -581,15 +581,6 @@ class ClipProjGenerate:
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF}),
             },
             "optional": {
-                "repetition_penalty": ("FLOAT", {
-                    "default": 1.05, "min": 1.0, "max": 2.0, "step": 0.01,
-                    "tooltip": "Discourages tokens already produced, which is what "
-                               "breaks an answer that locks into a repeating "
-                               "phrase. Only applies while sampling: at "
-                               "temperature 0 ComfyUI takes the most likely token "
-                               "outright and ignores this. To cure a loop, raise "
-                               "temperature to about 0.3 first, then this towards "
-                               "1.2."}),
                 "image": ("IMAGE", {"tooltip": "Image to describe (optional)"}),
                 "precision": (["weights", "float16", "bfloat16", "float32"], {
                     "default": "weights",
@@ -601,6 +592,18 @@ class ClipProjGenerate:
                     "tooltip": "Prepare the output matrix once instead of "
                                "re-casting it on every token. Turn off if VRAM "
                                "is tight."}),
+                # Appended last on purpose: ComfyUI restores widget values by
+                # position, so inserting an input above an existing one shifts
+                # every saved workflow and lands a string in a float field.
+                "repetition_penalty": ("FLOAT", {
+                    "default": 1.05, "min": 1.0, "max": 2.0, "step": 0.01,
+                    "tooltip": "Discourages tokens already produced, which is what "
+                               "breaks an answer that locks into a repeating "
+                               "phrase. Only applies while sampling: at "
+                               "temperature 0 ComfyUI takes the most likely token "
+                               "outright and ignores this. To cure a loop, raise "
+                               "temperature to about 0.3 first, then this towards "
+                               "1.2."}),
             },
         }
 
