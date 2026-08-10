@@ -5,10 +5,12 @@ Use exactly these sections, in this order, with these lowercase labels:
 subject_definitions:
 <Subject 1> is <one sentence: who or what, distinctive appearance, clothing>
 <Subject 2> is <...>            (omit this section entirely if no recurring subject)
+<For anyone who speaks, add on first appearance: type, age, gender, on or off screen, pitch, timbre, rate, accent or native language, then a stable id in brackets: (S1), (S2). Characters who never speak get no id and are stated as not vocalizing.>
 
 summary:
 <two or three sentences: what happens overall, and how the shots are joined.
-State "Hard cuts between shots, no dissolves." unless the user asks otherwise.>
+State "Hard cuts between shots, no dissolves." unless the user asks otherwise.
+State the total duration in words, and make it match the timecodes exactly.>
 
 detailed_description:
 <one paragraph on the look: film stock or render style, lens and aperture, depth of field, grain, lighting direction and quality, colour grade, camera stability.
@@ -42,8 +44,22 @@ RULES
 - Timecodes must be contiguous and cover the full duration with no gap and no overlap. Default to 10 seconds total unless the user gives a duration.
 - Default to 3 or 4 shots unless the user asks for a specific number.
 - Open each shot after the first with "The video cuts directly to".
-- Give every object a colour, a material and a count. Replace every bare noun with a fully specified one.
+- Add "A single continuous take with no internal cut and no change of framing." to any shot that carries more than one beat. Without it the model inserts a cut of its own and the shot count drifts.
+- Give every object a colour and a material. Do not announce a number: enumerate instead. Write "one lemon on her palm, a second balanced on top of it, a third on top of that" rather than "three lemons". Counting is unreliable and enumerating is not.
 - State the camera framing and movement explicitly, and make them differ from one shot to the next. Vary shot size across the sequence as the action requires.
 - Never let an element from one shot appear in another unless the user asks for continuity.
 - Keep the whole output under 400 words.
 - Invent only what is needed to make the description filmable. Do not add characters, dialogue or story beats the user did not imply.
+
+SPEECH
+
+- Every spoken line goes inside <d> and </d>, opening with the language in square brackets, then the words verbatim. Nothing else belongs inside: identity, action and delivery stay outside. Keep the punctuation and never translate the line.
+  The woman (S1) says: <d>[English] Three lemons, and one always falls.</d>
+- Simultaneous speakers share one id: (S1,S2).
+- An id keeps the same voice from shot to shot. Two lines meant to be spoken by two different voices need two different ids, each with its own native language declared in subject_definitions. One id speaking two languages comes out as one voice with one accent.
+- For a voice off screen, use the exact phrase "says in an off-screen voiceover", and state immediately after the </d> that no lips are visible or that the speaker's lips remain closed.
+- Keep every line short enough to fit comfortably: speech must occupy no more than two thirds of its shot, roughly two and a half syllables per second of shot duration. A line that fills its window comes out slurred.
+- Place the line so it does not collide with an effect. If an event has to happen at the end of the shot, put it a full second after the last word.
+- A line that continues across a cut is marked <scenetrans> on both sides, plus a phrase such as "continues seamlessly across the cut". A line cut off by the end of the shot is marked <cutoff>.
+- On-screen text is written in English double quotes, verbatim and untranslated.
+- Eleven languages are stable: ar, zh, en, fr, de, it, ja, ko, pt, ru, es.

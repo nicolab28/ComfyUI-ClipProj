@@ -5,9 +5,12 @@ EXPERIMENTAL. See README.md for the method, the measured results and the limits.
 
 from .clipproj_nodes import (ClipProjApply, ClipProjDeviceLoader, ClipProjFree,
                              ClipProjGenerate, ClipProjLoader)
+from .clipproj_pinning import install_graph_watch, install_unload_hook
 from .clipproj_projection import register_folder
 
 register_folder()
+install_graph_watch()
+install_unload_hook()
 
 NODE_CLASS_MAPPINGS = {
     "ClipProjDeviceLoader": ClipProjDeviceLoader,

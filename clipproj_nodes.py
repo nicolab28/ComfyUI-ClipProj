@@ -24,7 +24,7 @@ import comfy.sd
 import folder_paths
 
 from .clipproj_pinning import pin_patcher, release_all, release_role
-from .clipproj_projection import (build_control, guess_cond_dim,
+from .clipproj_projection import (build_control, build_residual, guess_cond_dim,
                                   list_projections, load_projection)
 
 PAD_TOKEN = 151643
@@ -133,6 +133,37 @@ def tags_from_embeds_info(seq_len, embeds_info):
     return tags
 
 
+
+def install_video_blocks(sm):
+    """Teach a student encoder to read MiniMax H3's two-frame video blocks.
+
+    ComfyUI implements that path on MiniMaxQwen3VL, a subclass reserved for the
+    32B. A 4B or an 8B is a plain Qwen3VL and would take the pair for a single
+    image, with the wrong grid and the wrong token count -- silently. The method
+    is therefore replaced on the instance, and delegates to the original for
+    everything that is not a video block.
+    """
+    tr = getattr(sm, "transformer", None)
+    if tr is None or getattr(tr, "_clipproj_video", False):
+        return
+    try:
+        from comfy.text_encoders.minimax import process_video_block
+    except Exception as e:
+        logging.warning("[ClipProj] video blocks unavailable: %s", e)
+        return
+    original = tr.preprocess_embed
+
+    def preprocess_embed(embed, device):
+        if embed.get("type") == "image" and embed.get("minimax_video_block", False):
+            flatten, grid = process_video_block(embed["data"])
+            merged, deepstack = tr.visual(flatten.to(device, dtype=torch.float32), grid)
+            return merged, {"grid": grid, "deepstack": deepstack}
+        return original(embed, device)
+
+    tr.preprocess_embed = preprocess_embed
+    tr._clipproj_video = True
+
+
 class ProjectedCLIP:
     """A small encoder disguised as a large one, by linear projection."""
 
@@ -171,10 +202,14 @@ class ProjectedCLIP:
         def add_text(s):
             entries.extend((t, 1.0) for t in tok(s, add_special_tokens=False)["input_ids"])
 
-        def add_vision(data):
+        def add_vision(data, video_block=False):
             entries.append((VISION_START, 1.0))
-            entries.append(({"type": "image", "data": data,
-                             "original_type": "image"}, 1.0))
+            embed = {"type": "image", "data": data, "original_type": "image"}
+            if video_block:
+                # Read back by preprocess_embed, which then routes the pair
+                # through process_video_block instead of the image path.
+                embed["minimax_video_block"] = True
+            entries.append((embed, 1.0))
             entries.append((VISION_END, 1.0))
 
         if minimax_ref_items:
@@ -193,11 +228,24 @@ class ProjectedCLIP:
                     # Audio never enters Qwen: only its label does.
                     add_text("<Audio %d>: " % counters["audio"])
                 else:
-                    raise ValueError(
-                        "ClipProj does not handle video references yet. They "
-                        "need the 2-frame temporal blocks of "
-                        "MiniMaxH3Tokenizer, which are not reproduced here. "
-                        "Image and audio references work.")
+                    # Video. MiniMax H3 does not treat a clip as a series of
+                    # images: it pairs the frames two by two into the vision
+                    # tower's temporal patch, and prefixes each pair with the
+                    # timestamp of its midpoint. Frames are expected at 2 fps,
+                    # and an odd count is padded by repeating the last one so
+                    # the final pair is complete.
+                    frames = item["data"]
+                    stamps = item.get("timestamps")
+                    if stamps is None:
+                        stamps = [i / 2.0 for i in range(frames.shape[0])]
+                    stamps = list(stamps)
+                    if frames.shape[0] % 2 == 1:
+                        frames = torch.cat([frames, frames[-1:]], dim=0)
+                        stamps.append(stamps[-1])
+                    add_text("<Video %d>: " % counters["video"])
+                    for k in range(0, frames.shape[0], 2):
+                        add_text("<%.1f seconds>" % ((stamps[k] + stamps[k + 1]) / 2.0))
+                        add_vision(frames[k:k + 2], video_block=True)
         else:
             for i, img in enumerate(images):
                 add_text("<Picture %d>: " % (i + 1))
@@ -219,6 +267,7 @@ class ProjectedCLIP:
         proj = self._proj
         base = self._base
         sm = _submodel(base)
+        install_video_blocks(sm)
 
         mm.load_models_gpu([base.patcher])
         device = base.patcher.load_device
@@ -272,9 +321,20 @@ class ProjectedCLIP:
                         "projection expects %d." % (d_in, proj["W"].shape[0]))
                 cache["p"] = {k: proj[k].to(dev) for k in
                               ("W", "mean_in", "std_in", "mean_out", "std_out")}
+                cache["mlp"] = build_residual(proj, dev, h.dtype)
         p = cache["p"]
 
-        cond = (((h - p["mean_in"]) / p["std_in"]) @ p["W"]) * p["std_out"] + p["mean_out"]
+        # Standardised space, where the ridge was fitted. The residual network,
+        # when the file carries one, corrects inside that same space so that it
+        # works at the scale of what it is correcting. Its last layer was
+        # trained from a zero initialisation, so a freshly trained network that
+        # learned nothing reproduces the matrix exactly.
+        xn = (h - p["mean_in"]) / p["std_in"]
+        yn = xn @ p["W"]
+        reseau = cache.get("mlp")
+        if reseau is not None:
+            yn = yn + reseau(xn)
+        cond = yn * p["std_out"] + p["mean_out"]
 
         # Token 0 is an attention sink: its direction is constant across prompts
         # (cosine 1.0000 measured over 1966 of them) and carries no information

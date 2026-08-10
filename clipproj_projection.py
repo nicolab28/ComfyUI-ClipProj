@@ -126,6 +126,41 @@ def load_projection(name):
     return data
 
 
+def build_residual(proj, device, dtype=torch.float32):
+    """Rebuild the residual network stored alongside the matrix, if any.
+
+    The file keeps it as plain tensors under `mlp.N.weight` / `mlp.N.bias`, which
+    keeps the format readable and avoids storing a pickled module. Only Linear
+    layers are stored; the activation between them is implied and fixed.
+
+    Args:
+        proj (dict): loaded projection.
+        device: where the network must live.
+        dtype: compute dtype, matched to the encoder output.
+
+    Returns:
+        torch.nn.Module|None: the network, or None when the file has no residual.
+    """
+    couches = sorted({int(k.split(".")[1]) for k in proj if k.startswith("mlp.")})
+    if not couches:
+        return None
+    modules = []
+    for n, i in enumerate(couches):
+        w = proj["mlp.%d.weight" % i]
+        lin = torch.nn.Linear(w.shape[1], w.shape[0], bias=("mlp.%d.bias" % i) in proj)
+        lin.weight.data = w.to(device=device, dtype=dtype)
+        if lin.bias is not None:
+            lin.bias.data = proj["mlp.%d.bias" % i].to(device=device, dtype=dtype)
+        modules.append(lin)
+        if n < len(couches) - 1:
+            modules.append(torch.nn.GELU())
+    reseau = torch.nn.Sequential(*modules).to(device=device, dtype=dtype)
+    reseau.eval()
+    for p in reseau.parameters():
+        p.requires_grad_(False)
+    return reseau
+
+
 def guess_cond_dim():
     """Infer the output dimension from any projection present on disk.
 
