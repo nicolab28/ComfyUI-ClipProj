@@ -35,10 +35,18 @@ VISION_END = 151653
 
 
 def gpu_devices():
-    """Available devices as 'cuda:N', falling back to cpu."""
-    if not torch.cuda.is_available():
-        return ["cpu"]
-    return ["cuda:%d" % i for i in range(torch.cuda.device_count())] + ["cpu"]
+    """Available devices: Intel XPU first (Arc), then CUDA, falling back to cpu.
+
+    Intel Arc A770 (XPU) needs xpu:0 so ClipProj can pin the small encoder on
+    the accelerator (upstream only exposed cuda:N / cpu).
+    """
+    devs = []
+    if torch.xpu.is_available():
+        devs.append("xpu:0")
+    if torch.cuda.is_available():
+        devs += ["cuda:%d" % i for i in range(torch.cuda.device_count())]
+    devs.append("cpu")
+    return devs
 
 
 # Hidden size of the vision merger output -> the CLIPType that instantiates the
