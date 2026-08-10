@@ -71,6 +71,14 @@ A cosine of 0.71 sounds poor and **is not** — the DiT tolerates far more than 
 - **fl2va with first and last frame** ✅, although `W` only ever saw text positions
 - robust to swapping encoder weights: a `W` calibrated on bf16 works on an abliterated fp8 variant, and on `int8_convrot` — whose rotation turns out to be compensated, so the activations stay in the expected frame
 
+## Update to 0.1.3, and re-download the matrices
+
+Two reasons, one of them silent.
+
+**The `-mlp` matrices carry a residual network, and an older node ignores it without saying so.** It reads the file, finds keys it does not know, drops them, and applies the linear part alone. Nothing fails, nothing warns, and you end up judging the plain matrix while believing you tested the residual.
+
+**Everything is renamed.** The matrices are now `mmh3-<encoder>-ClipProj[-celeb][-mlp]`. The previous `h3_qwen3vl_*` files moved to `obsolete/` on the Hugging Face repo and the `.pt` copies are gone: opening a pickle executes code, which makes no sense for a file holding six tensors. If a workflow of yours names an old file, point it at the new set.
+
 ## Changes in 0.1.3
 
 **Pinned encoders are released when they stop being used.** `resident` mode deliberately makes a model untouchable by ComfyUI's memory manager, because with `offload_device` equal to `load_device` an unload frees nothing yet removes the model from ComfyUI's accounting — it then oversells the VRAM and OOMs. The cost was that nothing ever released them either. Three paths now do.
