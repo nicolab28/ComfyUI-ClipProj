@@ -496,16 +496,35 @@ def _load_encoder(clip_name, clip_type, device, mode, unique_id):
         with torch.cuda.device(dev):
             torch.cuda.empty_cache()
 
+    # La detection tourne meme quand le type est impose. Elle cherche la tour
+    # visuelle, donc elle distingue un Qwen3-VL d'un Qwen3 ordinaire -- ce que
+    # la largeur ne fait pas : les deux familles partagent 2560 et 4096, la
+    # projection se charge sans rien signaler et sort quelque chose qui ignore
+    # le prompt. Choisir le type a la main court-circuitait ce garde-fou.
     label = ""
+    found = detect_arch(path)
     if clip_type == "auto":
-        found = detect_arch(path)
         if found is None:
             raise ValueError(
                 "Could not identify the architecture of %s. It may not be a "
-                "Qwen3-VL checkpoint. Pick the type by hand: krea2 for a 4B, "
-                "boogu for an 8B, minimax for the 32B." % clip_name)
+                "Qwen3-VL checkpoint: no vision tower was found in it, and a "
+                "text-only Qwen3 has the same hidden width, so nothing else "
+                "would have caught it. Pick the type by hand to load it "
+                "anyway: krea2 for a 4B, boogu for an 8B, minimax for the "
+                "32B." % clip_name)
         clip_type, label = found
         label = " [%s detected]" % label
+    elif found is not None and found[0] != clip_type:
+        raise ValueError(
+            "%s is a %s, but the type is set to %s. Set it to auto, or to %s."
+            % (clip_name, found[1], clip_type, found[0]))
+    elif found is None:
+        logging.warning(
+            "[ClipProj] no vision tower found in %s. If it is a text-only Qwen3 "
+            "rather than a Qwen3-VL, the projection will load without "
+            "complaint and produce conditioning that ignores your prompt: the "
+            "two families share the same hidden width, so nothing checks it.",
+            clip_name)
     ctype = getattr(comfy.sd.CLIPType, clip_type.upper(), comfy.sd.CLIPType.KREA2)
 
     if mode == "resident":
