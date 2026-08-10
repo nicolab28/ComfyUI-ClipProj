@@ -71,6 +71,10 @@ A cosine of 0.71 sounds poor and **is not** — the DiT tolerates far more than 
 - **fl2va with first and last frame** ✅, although `W` only ever saw text positions
 - robust to swapping encoder weights: a `W` calibrated on bf16 works on an abliterated fp8 variant, and on `int8_convrot` — whose rotation turns out to be compensated, so the activations stay in the expected frame
 
+## How it is built
+
+[CALIBRATION.md](CALIBRATION.md) documents the whole pipeline with timings: the corpus and where the prompts come from, the encoding stage and what it costs on a 3090, the ridge, the residual network, the attention sink, and the tokenisation mistake that returned a cosine of 0.0030 before it was found. [MEASUREMENTS.md](MEASUREMENTS.md) holds the numbers quoted elsewhere, with the method behind each one.
+
 ## Update to 0.1.4, and re-download the `-mlp` matrices
 
 Two reasons, one of them silent.
