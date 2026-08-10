@@ -4,6 +4,8 @@
 
 **Version 0.1.4** — the card is freed before the replacement loads, not after, and residual networks stay in the precision they were saved in.
 
+Requirement: Projection matrices on [Hugging Face](https://huggingface.co/NicoLab28/ClipProj-MiniMax-H3)  
+
 > ## ⚠️ Proof of concept — working, but a proof of concept
 > **It runs and it produces good video**, and every number below was measured on real hardware rather than estimated. It is still a proof of concept, not a finished product: built and tested on a single setup — **Windows 11, NVIDIA, ComfyUI 0.31.0** — with deliberately limited exploration. Expect rough edges and breaking changes. **Use at your own risk.**
 
