@@ -126,7 +126,7 @@ def load_projection(name):
     return data
 
 
-def build_residual(proj, device, dtype=torch.float32):
+def build_residual(proj, device, dtype=None):
     """Rebuild the residual network stored alongside the matrix, if any.
 
     The file keeps it as plain tensors under `mlp.N.weight` / `mlp.N.bias`, which
@@ -136,7 +136,10 @@ def build_residual(proj, device, dtype=torch.float32):
     Args:
         proj (dict): loaded projection.
         device: where the network must live.
-        dtype: compute dtype, matched to the encoder output.
+        dtype: compute dtype. None keeps the dtype the file was saved
+            in, which is the point of a fp16 residual: casting it up to
+            fp32 on load halves the file on disk and costs exactly the
+            same VRAM as before, which is no gain at all.
 
     Returns:
         torch.nn.Module|None: the network, or None when the file has no residual.
@@ -144,6 +147,8 @@ def build_residual(proj, device, dtype=torch.float32):
     couches = sorted({int(k.split(".")[1]) for k in proj if k.startswith("mlp.")})
     if not couches:
         return None
+    if dtype is None:
+        dtype = proj["mlp.%d.weight" % couches[0]].dtype
     modules = []
     for n, i in enumerate(couches):
         w = proj["mlp.%d.weight" % i]

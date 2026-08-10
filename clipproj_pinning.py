@@ -141,6 +141,36 @@ def release_role(role, key=None):
     _ACTIVE.pop(role, None)
 
 
+
+def release_device(carte, garde=None):
+    """Free every pinned model sitting on `carte`, except the role `garde`.
+
+    Called BEFORE loading, never after. Releasing once the replacement is
+    already resident means both sit on the card at the same time, and on a card
+    that only fits one of them that peak is an out-of-memory error rather than a
+    spike on a graph.
+
+    Args:
+        carte: the torch device about to receive a model.
+        garde (str|None): a role to leave alone.
+
+    Returns:
+        float: GB freed.
+    """
+    if carte is None:
+        return 0.0
+    total = 0.0
+    for role in list(_ACTIVE):
+        if role == garde:
+            continue
+        e = _ACTIVE[role]
+        if len(e) > 3 and e[3] == carte:
+            logging.info("[ClipProj] releasing %s before loading on %s", e[2], carte)
+            total += unload_patcher(e[1](), e[2])
+            _ACTIVE.pop(role, None)
+    return total
+
+
 def release_all():
     """Free every model pinned by ClipProj.
 
@@ -306,18 +336,6 @@ def pin_patcher(patcher, label="", role=None, key=None):
         if prev is not None and prev[1]() is not patcher:
             unload_patcher(prev[1](), prev[2])
             _ACTIVE.pop(role, None)
-    carte = getattr(patcher, "load_device", None)
-    if carte is not None:
-        for autre in list(_ACTIVE):
-            if autre == role:
-                continue
-            e = _ACTIVE[autre]
-            if len(e) > 3 and e[3] == carte and e[1]() is not patcher:
-                logging.info("[ClipProj] releasing %s: another encoder is taking %s",
-                             e[2], carte)
-                unload_patcher(e[1](), e[2])
-                _ACTIVE.pop(autre, None)
-
     if not getattr(patcher, "_clipproj_pinned", False):
         patcher.__class__ = _pinned_class(patcher.__class__)
         if label:

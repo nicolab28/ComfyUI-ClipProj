@@ -12,6 +12,7 @@ model pair validated so far.
 
 import json
 import logging
+import weakref
 import os
 import struct
 import time
@@ -23,7 +24,8 @@ import comfy.ops
 import comfy.sd
 import folder_paths
 
-from .clipproj_pinning import pin_patcher, release_all, release_role
+from .clipproj_pinning import (pin_patcher, release_all, release_device,
+                              release_role)
 from .clipproj_projection import (build_control, build_residual, guess_cond_dim,
                                   list_projections, load_projection)
 
@@ -164,6 +166,55 @@ def install_video_blocks(sm):
     tr._clipproj_video = True
 
 
+
+# Chaque rechargement du loader construit un nouveau ProjectedCLIP, donc un
+# nouveau cache GPU (W, moyennes, ecarts-types, et le reseau residuel qui pese a
+# lui seul 576 Mo en fp32). L'ancien garde le sien tant que ComfyUI n'a pas
+# remplace la sortie du noeud, ce qui n'arrive qu'APRES le chargement du nouvel
+# encodeur : au moment precis ou la carte est le plus sollicitee, elle porte deux
+# jeux de projections. Un registre faible permet de les vider avant. Faible pour
+# qu'il ne retienne rien lui-meme.
+_PROJETES = []
+
+
+def _enregistrer_projete(instance):
+    """Suit une instance sans la maintenir en vie."""
+    _PROJETES.append(weakref.ref(instance))
+
+
+def purge_projections(carte):
+    """Vide le cache GPU de toutes les projections posees sur `carte`.
+
+    Args:
+        carte: le peripherique a degager.
+
+    Returns:
+        float: Mo liberes, tels que comptes avant la purge.
+    """
+    total = 0.0
+    vivants = []
+    for ref in _PROJETES:
+        obj = ref()
+        if obj is None:
+            continue
+        vivants.append(ref)
+        cache = obj.__dict__.get("_gpu")
+        if not cache or cache.get("device") != carte:
+            continue
+        for cle in ("p", "mlp"):
+            valeur = cache.get(cle)
+            if valeur is None:
+                continue
+            tenseurs = (valeur.values() if isinstance(valeur, dict)
+                        else (p for p in valeur.parameters()))
+            total += sum(t.numel() * t.element_size() for t in tenseurs) / 2**20
+        cache.clear()
+    _PROJETES[:] = vivants
+    if total:
+        logging.info("[ClipProj] %.0f MB of projection caches cleared on %s", total, carte)
+    return total
+
+
 class ProjectedCLIP:
     """A small encoder disguised as a large one, by linear projection."""
 
@@ -174,6 +225,7 @@ class ProjectedCLIP:
         self.__dict__["_key"] = getattr(base.cond_stage_model, "clip", "qwen3vl_4b")
         # Device-side copy of the projection, made once.
         self.__dict__["_gpu"] = {}
+        _enregistrer_projete(self)
 
     def __getattr__(self, name):
         """Delegate anything not redefined here to the underlying CLIP."""
@@ -321,7 +373,7 @@ class ProjectedCLIP:
                         "projection expects %d." % (d_in, proj["W"].shape[0]))
                 cache["p"] = {k: proj[k].to(dev) for k in
                               ("W", "mean_in", "std_in", "mean_out", "std_out")}
-                cache["mlp"] = build_residual(proj, dev, h.dtype)
+                cache["mlp"] = build_residual(proj, dev)
         p = cache["p"]
 
         # Standardised space, where the ridge was fitted. The residual network,
@@ -333,7 +385,11 @@ class ProjectedCLIP:
         yn = xn @ p["W"]
         reseau = cache.get("mlp")
         if reseau is not None:
-            yn = yn + reseau(xn)
+            # Le reseau reste dans le type du fichier ; on convertit
+            # autour de lui. Un residu fp16 tient alors en fp16 en VRAM,
+            # pas seulement sur le disque.
+            td = reseau[0].weight.dtype
+            yn = yn + reseau(xn.to(td)).float()
         cond = yn * p["std_out"] + p["mean_out"]
 
         # Token 0 is an attention sink: its direction is constant across prompts
@@ -424,7 +480,21 @@ def _load_encoder(clip_name, clip_type, device, mode, unique_id):
     # afterwards means both encoders sit in VRAM at once, and on a tight card the
     # load fails before the release ever runs. No-op when the key is unchanged.
     role = "ClipProj:%s" % unique_id
-    release_role(role, key=key)
+    # Liberer AVANT de charger, et liberer toute la carte, pas seulement ce que
+    # ce noeud y avait mis. Deux raisons. La cle n'est plus consultee : quand ce
+    # code s'execute, ComfyUI a deja decide de recharger, donc s'abstenir ne
+    # sauvait aucun chargement et laissait seulement une copie orpheline. Et le
+    # balayage porte sur la carte parce qu'un autre noeud a pu y epingler un
+    # modele : sur une carte qui n'en tient qu'un, le pic des deux ensemble
+    # n'est pas un accident de courbe, c'est un OOM.
+    release_role(role)
+    release_device(dev, garde=role)
+    purge_projections(dev)
+    if dev.type == "cuda":
+        # Sans ceci les blocs restent reserves par l'allocateur torch et
+        # ComfyUI lit une carte encore pleine au moment de decider.
+        with torch.cuda.device(dev):
+            torch.cuda.empty_cache()
 
     label = ""
     if clip_type == "auto":
@@ -604,7 +674,12 @@ class ClipProjFree:
             tuple: (the input unchanged, a readable summary)
         """
         count, total = release_all()
-        info = "%d encoder(s) freed, %.2f GB" % (count, total)
+        # Les caches de projection ne sont pas des modeles ComfyUI : personne
+        # d'autre ne les libere, et un bouton Free qui laisse 600 Mo sur la carte
+        # ment sur ce qu'il fait.
+        mo = sum(purge_projections(torch.device("cuda", i))
+                 for i in range(torch.cuda.device_count()))
+        info = "%d encoder(s) freed, %.2f GB" % (count, total + mo / 1024.0)
         if scope == "all models":
             mm.unload_all_models()
             mm.soft_empty_cache(force=True)

@@ -2,7 +2,7 @@
 
 **Swap a large text encoder for a small one, with a learned linear projection.**
 
-**Version 0.1.3** — pinned encoders are now released when they stop being used, instead of piling up in VRAM.
+**Version 0.1.4** — the card is freed before the replacement loads, not after, and residual networks stay in the precision they were saved in.
 
 > ## ⚠️ Proof of concept — working, but a proof of concept
 > **It runs and it produces good video**, and every number below was measured on real hardware rather than estimated. It is still a proof of concept, not a finished product: built and tested on a single setup — **Windows 11, NVIDIA, ComfyUI 0.31.0** — with deliberately limited exploration. Expect rough edges and breaking changes. **Use at your own risk.**
@@ -71,13 +71,21 @@ A cosine of 0.71 sounds poor and **is not** — the DiT tolerates far more than 
 - **fl2va with first and last frame** ✅, although `W` only ever saw text positions
 - robust to swapping encoder weights: a `W` calibrated on bf16 works on an abliterated fp8 variant, and on `int8_convrot` — whose rotation turns out to be compensated, so the activations stay in the expected frame
 
-## Update to 0.1.3, and re-download the matrices
+## Update to 0.1.4, and re-download the `-mlp` matrices
 
 Two reasons, one of them silent.
 
 **The `-mlp` matrices carry a residual network, and an older node ignores it without saying so.** It reads the file, finds keys it does not know, drops them, and applies the linear part alone. Nothing fails, nothing warns, and you end up judging the plain matrix while believing you tested the residual.
 
 **Everything is renamed.** The matrices are now `mmh3-<encoder>-ClipProj[-celeb][-mlp]`. The previous `h3_qwen3vl_*` files moved to `obsolete/` on the Hugging Face repo and the `.pt` copies are gone: opening a pickle executes code, which makes no sense for a file holding six tensors. If a workflow of yours names an old file, point it at the new set.
+
+## Changes in 0.1.4
+
+**The card is freed before the replacement loads.** 0.1.3 released the previous encoder from inside the pinning routine, which runs *after* `load_clip` has already put the new one on the card. Both were resident at the same time for the duration of the load. On a card with room to spare that is a spike on a graph; on one that fits a single encoder it is an out-of-memory error. The release now happens on the line before the load. It no longer skips when the configuration is unchanged either: by the time that code runs, ComfyUI has already decided to reload, so abstaining saved no work and only left an orphaned copy behind.
+
+**Projection caches are freed too, and they were the larger half of the problem.** Each reload builds a fresh projection cache on the card — the matrix, the statistics, and the residual network, which alone is 576 MB in fp32 — while the previous one survives until ComfyUI replaces the node's output, which it only does once the load has finished. A measured failure: a 9.33 GB encoder loading onto a 12 GB card with 1.85 GB of leftovers, failing 48 MB short of the end. They are now cleared before the load, and the "Free" node clears them as well instead of reporting a total that ignored them.
+
+**A residual network keeps the dtype it was saved in.** The loader forced fp32 regardless of the file, so an fp16 residual halved on disk and cost exactly as much VRAM as before, which is no saving at all. Measured on the published matrices: 240 MB instead of 480 for the 4B, 288 MB instead of 576 for the 8B, with the network's inputs and outputs converted around it rather than the network itself. **The `-mlp` matrices on Hugging Face are now fp16 and half the size** — re-download them.
 
 ## Changes in 0.1.3
 
