@@ -1,0 +1,29 @@
+# Publie le node au registre ComfyUI a chaque fois que la version change.
+#
+# Le declencheur est pyproject.toml et non un tag : c'est ce fichier qui porte
+# le numero de version que le registre lit, donc le lier a autre chose ferait
+# diverger ce qui est publie de ce qui est declare. Bumper la version et pousser
+# suffit.
+#
+# Il faut un secret REGISTRY_ACCESS_TOKEN dans les reglages du depot, cree
+# depuis la page de l'editeur sur registry.comfy.org. Sans lui l'action echoue
+# proprement et ne publie rien.
+name: Publish to Comfy Registry
+
+on:
+  push:
+    branches: [main]
+    paths: ['pyproject.toml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Comfy-Org/publish-node-action@main
+        with:
+          personal_access_token: ${{ secrets.REGISTRY_ACCESS_TOKEN }}
