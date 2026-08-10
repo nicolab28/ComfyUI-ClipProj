@@ -227,6 +227,23 @@ Note also that int8 quantisation costs facts: the eye colour, and Will Smith's f
 
 None of this applies to ref2va, where identity comes from the reference image.
 
+## Feeding the residual several taps, which does not work
+
+The residual sees the same layer the ridge was calibrated on, tap 24. Neighbouring layers are not redundant with it — cosine 0.7 between adjacent taps — so there is signal next to the one being used, and the encodings for taps 22 and 26 were already on disk. It costs nothing to try.
+
+It loses. Same corpus, same ridge, same 16384-wide hidden layer, input widened from 2560 to 7680:
+
+| residual input | parameters | best test cosine |
+|---|---|---|
+| tap 24 alone | 126M | **0.7944** |
+| taps 22, 24, 26 | 210M | 0.7878 |
+
+Run twice, once with the usual patience of 8 and once with patience 30 so that the cosine learning-rate schedule had the same room. Both peak early and then decline: the second run peaks at 0.7878 around epoch 16 and falls to 0.783 by epoch 46 while the training loss keeps dropping from 0.5575 to 0.3091. That is overfitting, not a plateau.
+
+The extra capacity is spent memorising. It also converges faster at the very start, 0.7546 at epoch 1 against 0.7489, which is exactly what a model with more parameters and correlated inputs does before it turns.
+
+What this does not settle: the taps tried are the two immediately either side of 24, because those were the ones already encoded, and they are therefore the most redundant choice available. Widely spaced taps might behave differently. But the failure mode here is capacity against 1.1M training tokens rather than a shortage of signal, and that does not change with the spacing.
+
 ## A methodology note
 
 `calibration/run.py` selects the ridge λ from a grid. An optimum landing on the edge of that grid is not an optimum: the real value lies beyond it and the matrix is under-fitted. The 8B originally retained 1e4, which was the largest value tried. Widening the grid to 1e7 showed 1e4 was genuinely interior, so the result stood, but it stood by luck. The script now warns.
