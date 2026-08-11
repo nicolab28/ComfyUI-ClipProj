@@ -545,8 +545,17 @@ def _load_encoder(clip_name, clip_type, device, mode, unique_id):
     return clip
 
 
-MODE_TOOLTIP = ("resident: loaded in one go and pinned, fastest.\n"
-                "streaming / dynamic: pageable weights, ComfyUI can free the card.")
+MODE_TOOLTIP = (
+    "resident: loaded in one go and pinned. Fastest to encode, but it never "
+    "leaves the card, so the diffusion model keeps 4-9 GB less headroom at "
+    "every sampling step. On a tight card that trade is a bad one: the encoder "
+    "runs once, the DiT runs at every step, and it will start paging its own "
+    "weights instead.\n"
+    "streaming / dynamic: pageable weights, ComfyUI can free the card between "
+    "the encode and the sampling. Prefer these unless you have room to spare. "
+    "Known limit: the dynamic path can fail inside the vision tower with int8 "
+    "encoders when an image is present, which is why resident is still the "
+    "default.")
 
 
 class ClipProjDeviceLoader:
