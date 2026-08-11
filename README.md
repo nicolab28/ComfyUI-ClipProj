@@ -73,6 +73,23 @@ A cosine of 0.71 sounds poor and **is not** — the DiT tolerates far more than 
 - **fl2va with first and last frame** ✅, although `W` only ever saw text positions
 - robust to swapping encoder weights: a `W` calibrated on bf16 works on an abliterated fp8 variant, and on `int8_convrot` — whose rotation turns out to be compensated, so the activations stay in the expected frame
 
+## Which file do I pick
+
+Two files, and they have to match each other.
+
+**The encoder** goes in `ComfyUI/models/text_encoders/`. A Qwen3-VL-4B or a Qwen3-VL-8B. It must be a **VL** model: a text-only Qwen3 of the same size has the same hidden width, loads without complaint, and produces conditioning that ignores your prompt.
+
+**The matrix** goes in `ComfyUI/models/clip_projections/`, from [the Hugging Face repo](https://huggingface.co/NicoLab28/ClipProj-MiniMax-H3). `mmh3-4b-...` for a 4B encoder, `mmh3-8b-...` for an 8B. They are not interchangeable, the 4B outputs 2560 dimensions and the 8B 4096, and the node refuses a mismatch.
+
+| you loaded | you need |
+|---|---|
+| a Qwen3-VL-4B | `mmh3-4b-ClipProj-celeb-mlp.safetensors` |
+| a Qwen3-VL-8B | `mmh3-8b-ClipProj-celeb-mlp.safetensors` |
+
+Those two are the ones to start with. The `-mlp` suffix means it carries the residual network, `-celeb` means named people were in the calibration corpus. The other six files are variants without one or both, kept because the choice is not settled.
+
+The `<control:...>` entries in the dropdown are **not** projections. They are deliberate baselines: zero ignores your prompt entirely, identity copies the raw dimensions without any learning. They exist so you can check the learned matrix is doing the work, and they run on any encoder, which is why they are the only entries that never error.
+
 ## How it is built
 
 [CALIBRATION.md](CALIBRATION.md) documents the whole pipeline with timings: the corpus and where the prompts come from, the encoding stage and what it costs on a 3090, the ridge, the residual network, the attention sink, and the tokenisation mistake that returned a cosine of 0.0030 before it was found. [MEASUREMENTS.md](MEASUREMENTS.md) holds the numbers quoted elsewhere, with the method behind each one.

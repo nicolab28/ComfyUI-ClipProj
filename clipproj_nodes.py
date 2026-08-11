@@ -368,9 +368,21 @@ class ProjectedCLIP:
                 cache["p"] = build_control(proj["control"], d_in, guess_cond_dim(), dev)
             else:
                 if d_in != proj["W"].shape[0]:
+                    # Nommer les deux tailles ne suffit pas : la personne qui
+                    # tombe dessus a presque toujours telecharge une seule
+                    # matrice et branche un autre encodeur. Autant lui donner le
+                    # nom du fichier a prendre.
+                    taille = {2560: "4B", 4096: "8B", 5120: "32B"}
                     raise ValueError(
-                        "Dimension mismatch: the encoder outputs %d, the "
-                        "projection expects %d." % (d_in, proj["W"].shape[0]))
+                        "This projection does not go with this encoder. Your "
+                        "encoder is a %s (%d dims) and the projection expects "
+                        "a %s (%d dims). Each matrix only works with its own "
+                        "size: pick the mmh3-%s-ClipProj file, or point the "
+                        "loader at a %s encoder."
+                        % (taille.get(d_in, "?"), d_in,
+                           taille.get(proj["W"].shape[0], "?"), proj["W"].shape[0],
+                           taille.get(d_in, "?").lower(),
+                           taille.get(proj["W"].shape[0], "?")))
                 cache["p"] = {k: proj[k].to(dev) for k in
                               ("W", "mean_in", "std_in", "mean_out", "std_out")}
                 cache["mlp"] = build_residual(proj, dev)

@@ -67,11 +67,18 @@ def register_folder():
 
 
 def list_projections():
-    """Return the controls followed by every projection found on disk."""
+    """Return the controls followed by every projection found on disk.
+
+    Only files this node can actually open are listed. ComfyUI hands back
+    everything in the folder, so a README or a note left there shows up in the
+    dropdown as if it were a matrix, and picking it fails with an error about
+    file formats rather than about the obvious mistake.
+    """
     try:
         found = list(folder_paths.get_filename_list(FOLDER))
     except Exception:
         found = []
+    found = [f for f in found if f.lower().endswith((".safetensors", ".pt"))]
     return CONTROLS + found
 
 
