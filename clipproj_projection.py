@@ -110,10 +110,14 @@ def load_projection(name):
             except (TypeError, ValueError):
                 data[k] = v
     else:
-        # Legacy format. weights_only=False is required to read the scalars
-        # stored alongside the tensors, and it is exactly what makes .pt unsafe:
-        # prefer .safetensors for anything downloaded from elsewhere.
-        data = torch.load(path, map_location="cpu", weights_only=False)
+        # Legacy format, read with weights_only=True. Opening a pickle without
+        # that flag executes whatever the file decides to run, which is an
+        # absurd risk for six tensors and a handful of scalars, and it is the
+        # reason the published .pt files were withdrawn in the first place.
+        # Torch allows tensors and plain scalars through this path, which is
+        # all these files ever contained; anything else in there was not put
+        # there by this project.
+        data = torch.load(path, map_location="cpu", weights_only=True)
 
     for k in ("W", "mean_in", "std_in", "mean_out", "std_out", "tap"):
         if k not in data:
