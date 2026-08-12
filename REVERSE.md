@@ -61,4 +61,4 @@ H3 takes a single final hidden state, 5120 wide. One target, one regression, one
 
 ## Reproducing
 
-`calibration/rank.py` measures the effective rank and the tap correlations from two encodings. The Krea 2 architecture is read directly from ComfyUI's own source, no reverse engineering involved: `comfy/text_encoders/krea2.py` for the taps and the flattening, `comfy/ldm/krea2/model.py` for `txtfusion`.
+[`rank.py`](https://github.com/nicolab28/ClipProj-calibration/blob/main/rank.py) measures the effective rank and the tap correlations from two encodings. The Krea 2 architecture is read directly from ComfyUI's own source, no reverse engineering involved: `comfy/text_encoders/krea2.py` for the taps and the flattening, `comfy/ldm/krea2/model.py` for `txtfusion`.

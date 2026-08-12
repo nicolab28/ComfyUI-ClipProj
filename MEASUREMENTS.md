@@ -4,13 +4,13 @@ Every number quoted in the README or in the r/StableDiffusion thread, with the m
 
 Machine: i7-14700KF, 128 GB RAM, five GPUs behind a PLX switch at PCIe 4.0 x8. Windows 11, ComfyUI 0.31.0, PyTorch 2.13 + CUDA 13.0, Python 3.13.
 
-Reconstruction figures come from `calibration/run.py`, generation figures from MiniMax H3 at 832x480 or 864x480, 6 steps with the Turbo LoRA unless stated.
+Reconstruction figures come from [`run.py`](https://github.com/nicolab28/ClipProj-calibration/blob/main/run.py), generation figures from MiniMax H3 at 832x480 or 864x480, 6 steps with the Turbo LoRA unless stated.
 
 ---
 
 ## Does the small model carry the information at all
 
-`calibration/probe.py`, cross-prompt CKA between the 4B and the 32B, one mean vector per prompt, attention sink dropped and each dimension standardised.
+[`probe.py`](https://github.com/nicolab28/ClipProj-calibration/blob/main/probe.py), cross-prompt CKA between the 4B and the 32B, one mean vector per prompt, attention sink dropped and each dimension standardised.
 
 ```
 CKA, 200 prompts    0.95
@@ -21,7 +21,7 @@ Two traps here cost real time. Token 0 and a handful of dimensions out of 5120 c
 
 ## How well the projection reconstructs
 
-`calibration/run.py`, ridge regression, tap 24 of 36, held-out test set.
+[`run.py`](https://github.com/nicolab28/ClipProj-calibration/blob/main/run.py), ridge regression, tap 24 of 36, held-out test set.
 
 | Encoder | Corpus | Tokens | Test cosine | Test R² |
 |---|---|---|---|---|
@@ -46,7 +46,7 @@ So yes. One matrix per size covers every variant of that size, including `int8_c
 
 ## Are the tokenizers really identical
 
-The whole method rests on this: the same prompt must give the same ids at the same positions in both models. `calibration/tokens.py`.
+The whole method rests on this: the same prompt must give the same ids at the same positions in both models. [`tokens.py`](https://github.com/nicolab28/ClipProj-calibration/blob/main/tokens.py).
 
 ```
 2014 texts, 472 582 tokens compared
@@ -71,11 +71,11 @@ norm of an ordinary text token                              291
 
 It carries nothing from the text and its direction never changes. Calibration excludes it, correctly, because its magnitude would wreck the statistics. But v0.1.0 projected it anyway through a matrix that had never seen one, producing an arbitrary vector of enormous norm: 0.5 % of the positions on a 200 token prompt and nobody notices, 14 % on a 7 token prompt and the result is ruined.
 
-Since the vector is constant, substituting its measured value is exact rather than approximate. `calibration/add_sink.py` writes it into a matrix.
+Since the vector is constant, substituting its measured value is exact rather than approximate. [`add_sink.py`](https://github.com/nicolab28/ClipProj-calibration/blob/main/add_sink.py) writes it into a matrix.
 
 ## Do short prompts break
 
-I assumed they did, because the calibration corpus filters out anything under 15 words. `calibration/length.py`, per-token cosine, sink excluded, sink substitution applied.
+I assumed they did, because the calibration corpus filters out anything under 15 words. [`length.py`](https://github.com/nicolab28/ClipProj-calibration/blob/main/length.py), per-token cosine, sink excluded, sink substitution applied.
 
 ```
  2 words    0.9081
@@ -92,7 +92,7 @@ Three points of decline between 80 words and 2. **My hypothesis was wrong.** The
 
 ## Does a non-English line reconstruct worse
 
-Spoken French degrades badly in generation, so I assumed the English-only corpus was to blame. `calibration/language.py` compares prompts identical word for word except the quoted line.
+Spoken French degrades badly in generation, so I assumed the English-only corpus was to blame. [`language.py`](https://github.com/nicolab28/ClipProj-calibration/blob/main/language.py) compares prompts identical word for word except the quoted line.
 
 ```
 English line in an English prompt    0.8996
@@ -211,7 +211,7 @@ The 32B keeps all three languages. The 4B keeps the accent and slurs the words. 
 
 ## Where named references actually break
 
-`calibration/knows.py` asks the encoder to describe a person in plain text, which bypasses the matrix entirely.
+[`knows.py`](https://github.com/nicolab28/ClipProj-calibration/blob/main/knows.py) asks the encoder to describe a person in plain text, which bypasses the matrix entirely.
 
 ```
 Scarlett Johansson, hair and eyes
@@ -246,4 +246,4 @@ What this does not settle: the taps tried are the two immediately either side of
 
 ## A methodology note
 
-`calibration/run.py` selects the ridge λ from a grid. An optimum landing on the edge of that grid is not an optimum: the real value lies beyond it and the matrix is under-fitted. The 8B originally retained 1e4, which was the largest value tried. Widening the grid to 1e7 showed 1e4 was genuinely interior, so the result stood, but it stood by luck. The script now warns.
+[`run.py`](https://github.com/nicolab28/ClipProj-calibration/blob/main/run.py) selects the ridge λ from a grid. An optimum landing on the edge of that grid is not an optimum: the real value lies beyond it and the matrix is under-fitted. The 8B originally retained 1e4, which was the largest value tried. Widening the grid to 1e7 showed 1e4 was genuinely interior, so the result stood, but it stood by luck. The script now warns.
