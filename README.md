@@ -104,6 +104,33 @@ Those two are the ones to start with. The `-mlp` suffix means it carries the res
 
 The `<control:...>` entries in the dropdown are **not** projections. They are deliberate baselines: zero ignores your prompt entirely, identity copies the raw dimensions without any learning. They exist so you can check the learned matrix is doing the work, and they run on any encoder, which is why they are the only entries that never error.
 
+## Which encoder file, and can I use a quantised one
+
+Yes, and this is the one place where the project is more forgiving than it looks. A matrix calibrated on a bf16 encoder works on any variant of the same size: measured against an abliterated fp8 build, the cosine gap is **0.0023**. You do not need the checkpoint the matrix was fitted on.
+
+| encoder | size | notes |
+|---|---|---|
+| `qwen3vl_4b_fp8_scaled` | 4.9 GB | the safe default, pages fine in any memory mode |
+| `qwen3vl_4b_bf16` | 8.3 GB | what the 4B matrices were calibrated on |
+| `qwen3vl_4b_int8_convrot` | 4.5 GB | smallest of the safetensors, but see below |
+| `qwen3vl_8b_nvfp4` | 5.9 GB | for the 8B matrices |
+| abliterated / "heretic" builds | varies | work, and are not better, see below |
+| int4 and GGUF community builds | 2 to 2.6 GB | reported working for text, unverified here |
+
+**int8 weights only work in `resident` mode with this node's own loader.** The pageable path moves and recasts them and the dequantisation is then handed bf16 where it expects int8. Since 0.1.8 the loader refuses that combination up front instead of failing on a message that names nothing. If you need the card freed between the encode and the sampling, use fp8_scaled, or use ComfyUI's stock `Load CLIP` as described above.
+
+**Abliterated encoders do not help.** It is a reasonable guess that they would, since the 32B used as the teacher is itself abliterated, so an aligned student might diverge from it on anything the alignment suppresses. Measured on 120 adult-themed prompts against 120 identically-generated neutral ones, there is a real domain gap of **-0.023** — and swapping the aligned student for an abliterated one does not close it, it widens it slightly, to -0.026 and -0.034. The matrix was fitted on the aligned model, so moving the student away from what the matrix knows costs more than the content match gains.
+
+**GGUF and int4 builds circulate and people report them working**, down to 2 GB, which matters if you have 8 GB of VRAM. Nothing here is tested against them. One report says reference *videos* fail with a GGUF encoder while text works, which would point at the vision tower rather than the projection, but that is unconfirmed.
+
+## Why not the other way round, a 32B in front of Krea 2
+
+Asked often enough to deserve its own page: [REVERSE.md](REVERSE.md).
+
+The short version is that a projection converts, it never adds. Fitting a 32B into Krea 2's space means fitting it toward what the 4B produces, since that is what Krea 2's DiT reads, so the ceiling is exactly the 4B and the conversion loss puts you under it. You would spend 11 GB to get slightly less than a 4B already gives you.
+
+Krea 2 also takes twelve hidden states rather than one, `12 × 2560` per token, mixed by a small transformer inside its DiT. Measured, those twelve stacked taps carry an effective rank of 13 against 113 for the 32B's single state: six times the numbers, a ninth of the spread.
+
 ## How it is built
 
 [CALIBRATION.md](CALIBRATION.md) documents the whole pipeline with timings: the corpus and where the prompts come from, the encoding stage and what it costs on a 3090, the ridge, the residual network, the attention sink, and the tokenisation mistake that returned a cosine of 0.0030 before it was found. [MEASUREMENTS.md](MEASUREMENTS.md) holds the numbers quoted elsewhere, with the method behind each one.
