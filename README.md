@@ -9,6 +9,16 @@ Requirement: Projection matrices on [Hugging Face](https://huggingface.co/NicoLa
 > ## ⚠️ Proof of concept — working, but a proof of concept
 > **It runs and it produces good video**, and every number below was measured on real hardware rather than estimated. It is still a proof of concept, not a finished product: built and tested on a single setup — **Windows 11, NVIDIA, ComfyUI 0.31.0** — with deliberately limited exploration. Expect rough edges and breaking changes. **Use at your own risk.**
 
+## Where this came from
+
+I am not an ML researcher. I work in imaging, and programming is a tool and a hobby rather than my trade. This started as something to tinker with: I wanted to understand how a diffusion model actually uses its text encoder, and the only way I know how to understand something is to take it apart and see whether it still runs afterwards.
+
+So the question was never "how do I save VRAM". It was "is this even possible at all". I expected it to fail. A linear map between two models that were never trained together, fitted in a single pass with no gradients and no learning rate, has no business producing usable video.
+
+It did, and the first results were good enough that keeping them on my own disk seemed silly. That is the whole story, and it is why this is labelled a proof of concept rather than a tool: it was never designed as one.
+
+It is also why there are three documents of measurements here. Before showing this to anyone I had to convince myself I was not fooling myself, and most of what I tried along the way turned out to be wrong. Those attempts are written down as well.
+
 Diffusion models spend a lot of VRAM on their text encoder. MiniMax H3 uses a **Qwen3-VL-32B** truncated to 50 layers — **15.7 GB in NVFP4** — solely to turn a prompt into a `[seq, 5120]` conditioning tensor.
 
 ClipProj replaces it with a **Qwen3-VL-4B** (2560 dims) plus a learned linear map into the 5120-dim space the DiT expects:
