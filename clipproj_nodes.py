@@ -785,8 +785,7 @@ class ClipProjFree:
         # Les caches de projection ne sont pas des modeles ComfyUI : personne
         # d'autre ne les libere, et un bouton Free qui laisse 600 Mo sur la carte
         # ment sur ce qu'il fait.
-        mo = sum(purge_projections(torch.device("cuda", i))
-                 for i in range(torch.cuda.device_count()))
+        mo = sum(purge_projections(dev) for dev in mm.get_all_torch_devices())
         info = "%d encoder(s) freed, %.2f GB" % (count, total + mo / 1024.0)
         if scope == "all models":
             mm.unload_all_models()
