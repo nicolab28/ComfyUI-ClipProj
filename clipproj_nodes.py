@@ -84,6 +84,29 @@ def detect_arch(path):
     return None
 
 
+
+def quantized_formats(path):
+    """Formats de quantification declares dans l'en-tete safetensors.
+
+    Args:
+        path (str): chemin du checkpoint.
+
+    Returns:
+        set[str]: les formats trouves, vide si le fichier n'en declare aucun.
+    """
+    try:
+        with open(path, "rb") as f:
+            n = struct.unpack("<Q", f.read(8))[0]
+            header = json.loads(f.read(n))
+        brut = header.get("__metadata__", {}).get("_quantization_metadata")
+        if not brut:
+            return set()
+        meta = json.loads(brut)
+        return {c.get("format", "") for c in meta.get("layers", {}).values()}
+    except Exception:
+        return set()
+
+
 def _submodel(clip):
     """Return the inner SDClipModel, bypassing the TEModel overrides.
 
@@ -538,6 +561,22 @@ def _load_encoder(clip_name, clip_type, device, mode, unique_id):
             "two families share the same hidden width, so nothing checks it.",
             clip_name)
     ctype = getattr(comfy.sd.CLIPType, clip_type.upper(), comfy.sd.CLIPType.KREA2)
+
+    # Les poids quantifies ne survivent pas au chemin paginé : ComfyUI les
+    # deplace et les recast, et la fonction de dequantification recoit alors un
+    # tenseur en bf16 la ou elle attend de l'int8. Le message qui en sort,
+    # "No backend can handle 'dequantize_int8_embedding'", ne dit pas d'ou vient
+    # le probleme. Signale sur r/StableDiffusion par quelqu'un qui avait suivi
+    # mon conseil de quitter le mode resident.
+    formats = quantized_formats(path)
+    if mode != "resident" and any("int" in q for q in formats):
+        raise ValueError(
+            "%s carries int8 quantized weights, which the '%s' mode cannot "
+            "page: ComfyUI moves and recasts them, and the dequantisation then "
+            "receives bf16 where it expects int8. Use 'resident' with this "
+            "file, or switch to a bf16 or fp8_scaled encoder if you need the "
+            "card to be freed between the encode and the sampling."
+            % (clip_name, mode))
 
     if mode == "resident":
         clip = comfy.sd.load_clip(

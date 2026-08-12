@@ -2,7 +2,7 @@
 
 **Swap a large text encoder for a small one, with a learned linear projection.**
 
-**Version 0.1.4** — the card is freed before the replacement loads, not after, and residual networks stay in the precision they were saved in.
+**Version 0.1.8** — an int8 encoder is now refused outside resident mode instead of failing on a dequantisation message that names nothing.
 
 Requirement: Projection matrices on [Hugging Face](https://huggingface.co/NicoLab28/ClipProj-MiniMax-H3)  
 
