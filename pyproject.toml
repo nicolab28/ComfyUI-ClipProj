@@ -1,16 +1,29 @@
 [project]
 name = "comfyui-clipproj"
 description = "Swap a large text encoder for a small one with a learned linear projection. Cuts MiniMax H3 conditioning from 15.7 GB to 5.2 GB."
-version = "0.1.11"
+version = "0.1.12"
 license = { file = "LICENSE" }
 repository = "https://github.com/nicolab28/ComfyUI-ClipProj"
 requires-python = ">=3.10"
 dependencies = []
 # OS Independent: nothing in the code is platform-specific (no absolute paths,
 # no win32 calls). Only the *testing* was Windows-only, which the README states.
+#
+# No GPU classifier. Two reasons, and the second one alone would be enough.
+#
+# It would be false: the node goes through comfy.model_management for every
+# device it touches, so it runs on whatever ComfyUI runs on. XPU is exercised in
+# the wild -- see PRs 3 and 6.
+#
+# And it breaks the Manager. "Environment :: GPU :: NVIDIA CUDA" is stored by the
+# registry as "GPU :: NVIDIA CUDA", while the frontend compares against its own
+# enum of exactly 'CUDA' | 'ROCm' | 'Metal' | 'CPU'. Nothing translates between
+# the two, so the check fails on every machine, including NVIDIA ones, and every
+# version shows a compatibility warning. The OS field has a normalizer for
+# "OS Independent"; the accelerator field has none. An absent list means "all
+# accelerators", which is both correct here and the only value that works.
 classifiers = [
     "Operating System :: OS Independent",
-    "Environment :: GPU :: NVIDIA CUDA",
     "Development Status :: 3 - Alpha",
 ]
 
