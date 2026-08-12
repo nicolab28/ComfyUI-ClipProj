@@ -548,11 +548,17 @@ def _load_encoder(clip_name, clip_type, device, mode, unique_id):
     release_role(role)
     release_device(dev, garde=role)
     purge_projections(dev)
-    if dev.type == "cuda":
-        # Sans ceci les blocs restent reserves par l'allocateur torch et
-        # ComfyUI lit une carte encore pleine au moment de decider.
-        with torch.cuda.device(dev):
-            torch.cuda.empty_cache()
+    # Sans ceci les blocs restent reserves par l'allocateur torch et ComfyUI lit
+    # une carte encore pleine au moment de decider. Le backend est choisi sur le
+    # type du peripherique : ecrire torch.cuda en dur ne libererait rien sur une
+    # Arc, alors que le noeud propose desormais xpu:N.
+    backend = getattr(torch, dev.type, None)
+    if backend is not None and hasattr(backend, "empty_cache"):
+        try:
+            with backend.device(dev):
+                backend.empty_cache()
+        except Exception:
+            backend.empty_cache()
 
     # La detection tourne meme quand le type est impose. Elle cherche la tour
     # visuelle, donc elle distingue un Qwen3-VL d'un Qwen3 ordinaire -- ce que
