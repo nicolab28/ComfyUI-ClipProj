@@ -37,10 +37,33 @@ VISION_END = 151653
 
 
 def gpu_devices():
-    """Available devices as 'cuda:N', falling back to cpu."""
-    if not torch.cuda.is_available():
-        return ["cpu"]
-    return ["cuda:%d" % i for i in range(torch.cuda.device_count())] + ["cpu"]
+    """Available accelerators as 'cuda:N' then 'xpu:N', falling back to cpu.
+
+    Every backend is enumerated rather than assumed to hold one device: the
+    whole point of this widget is to choose a card on a machine that has
+    several, and hardcoding index 0 would take that away from exactly the
+    people who asked for the backend.
+
+    CUDA stays first so the default entry does not move. An Intel CPU with
+    integrated graphics can expose an XPU device alongside an NVIDIA card, and
+    listing it first would silently send the encoder to the iGPU on machines
+    that were working fine.
+    """
+    devs = []
+    for nom in ("cuda", "xpu"):
+        backend = getattr(torch, nom, None)
+        # getattr rather than a direct call: torch.xpu does not exist on every
+        # build, and an AttributeError here would take the whole node pack down
+        # at import time on machines that have nothing to do with Intel.
+        if backend is None:
+            continue
+        try:
+            if not backend.is_available():
+                continue
+            devs += ["%s:%d" % (nom, i) for i in range(backend.device_count())]
+        except Exception:
+            continue
+    return devs + ["cpu"]
 
 
 # Hidden size of the vision merger output -> the CLIPType that instantiates the
