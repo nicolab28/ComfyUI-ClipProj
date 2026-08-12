@@ -73,6 +73,20 @@ A cosine of 0.71 sounds poor and **is not** — the DiT tolerates far more than 
 - **fl2va with first and last frame** ✅, although `W` only ever saw text positions
 - robust to swapping encoder weights: a `W` calibrated on bf16 works on an abliterated fp8 variant, and on `int8_convrot` — whose rotation turns out to be compensated, so the activations stay in the expected frame
 
+## One GPU, or not much VRAM: use the stock loader
+
+There are two ways to wire this, and the all-in-one node is the wrong one for most people.
+
+**If you have a single card, or a tight one**, use ComfyUI's own `Load CLIP` with the type set to `krea2` for a 4B or `boogu` for an 8B, then pass its output through **`ClipProj Apply`** with your matrix. That is all. ComfyUI then manages the encoder exactly as it manages any other, offloading it to RAM once the prompt is encoded, so the diffusion model gets the whole card back for sampling.
+
+```
+Load CLIP  (type: krea2)  ──>  ClipProj Apply  ──>  the H3 node's clip input
+```
+
+**`ClipProj Loader (all-in-one)` exists for multi-GPU machines.** It adds two things the stock loader cannot do: pick which card the encoder lands on, and pin it there so it is never moved. Both are useful when you have a spare GPU to park an encoder on. Both are actively harmful on a single card, because a pinned encoder takes 4 to 9 GB away from the diffusion model at every sampling step, and the model then pages its own weights instead. It was built on a five-GPU machine and that shows.
+
+Reported from an 8 GB card: the stock 32B looked *faster* than a projected 4B, because ComfyUI unloads the 32B before sampling while the pinned 4B stayed put.
+
 ## Which file do I pick
 
 Two files, and they have to match each other.
