@@ -112,7 +112,7 @@ Two files, and they have to match each other.
 | a Qwen3-VL-4B | `mmh3-4b-ClipProj-v3-mlp.safetensors` |
 | a Qwen3-VL-8B | `mmh3-8b-ClipProj-v3-mlp.safetensors` |
 
-Those two are the ones to start with, and they need **node 0.1.13 or later**. The `-mlp` suffix means the file carries the non-linear part; the plain `-v3` files are the linear matrix alone. Take the `-mlp` unless you specifically want the linear baseline: a matrix does not carry an attribute the prompt states once. Ask for crossed ankles and it will seat the subject cross-legged.
+Those two are the ones to start with, and they need **node 0.1.13 or later**. The `-mlp` suffix means the file carries the non-linear part; the plain `-v3` files are the linear matrix alone. Take the `-mlp` unless you specifically want the linear baseline: it measures closer to the 32B, 0.9449 against 0.9289 on the 8B, and on the demo scene the plain matrices get the seated pose wrong where the residuals hold it. The gap is narrower than that sounds though — everything else in that prompt comes through on the plain matrices too.
 
 The v2 files (`-celeb-mlp` and the six variants beside them) still work and are kept, but they were calibrated against a modified 32B and against a corpus with no image tokens at all. Prefer v3.
 
