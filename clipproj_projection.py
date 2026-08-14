@@ -126,11 +126,19 @@ def load_projection(name):
         # there by this project.
         data = torch.load(path, map_location="cpu", weights_only=True)
 
-    for k in ("W", "mean_in", "std_in", "mean_out", "std_out", "tap"):
+    # W is optional. A file trained without a linear path carries none, and
+    # storing a matrix of zeros would cost 26 MB on disk and a 2560x5120 matmul
+    # per token to add nothing. The dimensions come from mean_in / mean_out,
+    # which every file has and which say the same thing.
+    for k in ("mean_in", "std_in", "mean_out", "std_out", "tap"):
         if k not in data:
             raise KeyError("Key '%s' missing from %s" % (k, name))
+    # W included when present: the activations arrive in float32, and a half
+    # matrix on the right of that matmul is a hard error, not a silent cast.
+    # The 26 MB saved by keeping it half are not worth a broken node.
     for k in ("W", "mean_in", "std_in", "mean_out", "std_out"):
-        data[k] = data[k].float()
+        if k in data:
+            data[k] = data[k].float()
 
     _CACHE.clear()  # one projection at a time: several tens of MB each
     _CACHE[key] = data
@@ -190,7 +198,7 @@ def guess_cond_dim():
         if name in CONTROLS:
             continue
         try:
-            return int(load_projection(name)["W"].shape[1])
+            return int(load_projection(name)["mean_out"].shape[0])
         except Exception:
             continue
     return DEFAULT_COND_DIM

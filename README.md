@@ -2,7 +2,9 @@
 
 **Swap a large text encoder for a small one, with a learned linear projection.**
 
-**Version 0.1.8** — an int8 encoder is now refused outside resident mode instead of failing on a dequantisation message that names nothing.
+**Version 0.1.13 — required by the v3 matrices.** The `-v3-mlp` files carry no linear matrix, and any earlier version raises `KeyError: 'W'` when loading one.
+
+It also makes **`ClipProjApply` usable with an int8 encoder**. A quantised Qwen3-VL loaded through ComfyUI's own `Load CLIP` and passed to `ClipProjApply` failed inside the vision tower as soon as a reference image was present: `dequantize_int8_embedding` received a tensor the cast context had already dequantised to bf16, and said so in a message that named neither the node nor the file. The position embedding now falls back to a plain lookup instead. It never showed up on a text-only prompt, nor in resident mode, which is why it went unnoticed for so long.
 
 Requirement: Projection matrices on [Hugging Face](https://huggingface.co/NicoLab28/ClipProj-MiniMax-H3)  
 
@@ -107,10 +109,12 @@ Two files, and they have to match each other.
 
 | you loaded | you need |
 |---|---|
-| a Qwen3-VL-4B | `mmh3-4b-ClipProj-celeb-mlp.safetensors` |
-| a Qwen3-VL-8B | `mmh3-8b-ClipProj-celeb-mlp.safetensors` |
+| a Qwen3-VL-4B | `mmh3-4b-ClipProj-v3-mlp.safetensors` |
+| a Qwen3-VL-8B | `mmh3-8b-ClipProj-v3-mlp.safetensors` |
 
-Those two are the ones to start with. The `-mlp` suffix means it carries the residual network, `-celeb` means named people were in the calibration corpus. The other six files are variants without one or both, kept because the choice is not settled.
+Those two are the ones to start with, and they need **node 0.1.13 or later**. The `-mlp` suffix means the file carries the non-linear part; the plain `-v3` files are the linear matrix alone. Take the `-mlp` unless you specifically want the linear baseline: a matrix does not carry an attribute the prompt states once. Ask for crossed ankles and it will seat the subject cross-legged.
+
+The v2 files (`-celeb-mlp` and the six variants beside them) still work and are kept, but they were calibrated against a modified 32B and against a corpus with no image tokens at all. Prefer v3.
 
 The `<control:...>` entries in the dropdown are **not** projections. They are deliberate baselines: zero ignores your prompt entirely, identity copies the raw dimensions without any learning. They exist so you can check the learned matrix is doing the work, and they run on any encoder, which is why they are the only entries that never error.
 

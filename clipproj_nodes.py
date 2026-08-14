@@ -212,6 +212,65 @@ def install_video_blocks(sm):
     tr._clipproj_video = True
 
 
+def install_int8_vision_fix(sm):
+    """Keep an int8 encoder usable when a reference image is present.
+
+    comfy/ops.py, MixedPrecisionOps.forward_comfy_cast_weights, branches on the
+    weight's DECLARED format instead of what the cast context actually returned:
+
+        with CastBiasWeightContext(..., offloadable=True) as (qdata, _bias):
+            if isinstance(qdata, QuantizedTensor):
+                qdata = qdata._qdata          # int8, as expected
+            else:
+                params, scale = weight._params, None   # already dequantized
+            if self.quant_format == "int8_tensorwise":
+                dequantize_embedding(qdata, params, input)   # both branches
+
+    On the pageable path the context hands back an already dequantized tensor,
+    and the int8 dequantizer is called on bf16 anyway:
+
+        NoCapableBackendError: dequantize_int8_embedding:
+        q: dtype torch.bfloat16 not in {torch.int8}
+
+    Only the vision tower's pos_embed goes through that path, and only when an
+    image is present -- which is why a text-only prompt never showed it, and why
+    resident mode (disable_dynamic=True) did not either.
+
+    Rather than reimplement the method, which would break on the next upstream
+    change, the call is retried with quant_format cleared: the same code then
+    takes its own F.embedding branch, which handles a dequantized tensor
+    correctly since the scale has already been applied by the cast. A memo
+    avoids paying the failed attempt more than once.
+    """
+    tr = getattr(sm, "transformer", None)
+    vis = getattr(tr, "visual", None) if tr is not None else None
+    pe = getattr(vis, "pos_embed", None) if vis is not None else None
+    if pe is None or getattr(pe, "_clipproj_int8", False):
+        return
+    if getattr(pe, "quant_format", None) != "int8_tensorwise":
+        return
+    original = pe.forward_comfy_cast_weights
+    etat = {"replie": False}
+
+    def forward_comfy_cast_weights(input, out_dtype=None):
+        if not etat["replie"]:
+            try:
+                return original(input, out_dtype=out_dtype)
+            except Exception as e:
+                etat["replie"] = True
+                logging.info("[ClipProj] pos_embed int8 unusable on this load "
+                             "path (%s), falling back to a plain lookup", e)
+        fmt = pe.quant_format
+        pe.quant_format = None
+        try:
+            return original(input, out_dtype=out_dtype)
+        finally:
+            pe.quant_format = fmt
+
+    pe.forward_comfy_cast_weights = forward_comfy_cast_weights
+    pe._clipproj_int8 = True
+
+
 
 # Chaque rechargement du loader construit un nouveau ProjectedCLIP, donc un
 # nouveau cache GPU (W, moyennes, ecarts-types, et le reseau residuel qui pese a
@@ -366,6 +425,7 @@ class ProjectedCLIP:
         base = self._base
         sm = _submodel(base)
         install_video_blocks(sm)
+        install_int8_vision_fix(sm)
 
         mm.load_models_gpu([base.patcher])
         device = base.patcher.load_device
@@ -413,7 +473,10 @@ class ProjectedCLIP:
             if "control" in proj:
                 cache["p"] = build_control(proj["control"], d_in, guess_cond_dim(), dev)
             else:
-                if d_in != proj["W"].shape[0]:
+                # mean_in plutot que W : les fichiers entraines sans chemin
+                # lineaire n'ont pas de W, et mean_in porte la meme dimension.
+                d_proj = proj["mean_in"].shape[0]
+                if d_in != d_proj:
                     # Nommer les deux tailles ne suffit pas : la personne qui
                     # tombe dessus a presque toujours telecharge une seule
                     # matrice et branche un autre encodeur. Autant lui donner le
@@ -426,11 +489,12 @@ class ProjectedCLIP:
                         "size: pick the mmh3-%s-ClipProj file, or point the "
                         "loader at a %s encoder."
                         % (taille.get(d_in, "?"), d_in,
-                           taille.get(proj["W"].shape[0], "?"), proj["W"].shape[0],
+                           taille.get(d_proj, "?"), d_proj,
                            taille.get(d_in, "?").lower(),
-                           taille.get(proj["W"].shape[0], "?")))
+                           taille.get(d_proj, "?")))
                 cache["p"] = {k: proj[k].to(dev) for k in
-                              ("W", "mean_in", "std_in", "mean_out", "std_out")}
+                              ("W", "mean_in", "std_in", "mean_out", "std_out")
+                              if k in proj}
                 cache["mlp"] = build_residual(proj, dev)
         p = cache["p"]
 
@@ -440,14 +504,23 @@ class ProjectedCLIP:
         # trained from a zero initialisation, so a freshly trained network that
         # learned nothing reproduces the matrix exactly.
         xn = (h - p["mean_in"]) / p["std_in"]
-        yn = xn @ p["W"]
         reseau = cache.get("mlp")
+        # Pas de W : le reseau a ete entraine sans chemin lineaire et porte tout.
+        # Le produit par une matrice de zeros donnerait le meme resultat pour un
+        # matmul 2560x5120 par token, et 26 Mo de zeros sur la carte.
+        yn = xn @ p["W"] if "W" in p else None
         if reseau is not None:
             # Le reseau reste dans le type du fichier ; on convertit
             # autour de lui. Un residu fp16 tient alors en fp16 en VRAM,
             # pas seulement sur le disque.
             td = reseau[0].weight.dtype
-            yn = yn + reseau(xn.to(td)).float()
+            sortie = reseau(xn.to(td)).float()
+            yn = sortie if yn is None else yn + sortie
+        elif yn is None:
+            raise ValueError(
+                "This projection has neither a linear matrix nor a residual "
+                "network, so it cannot produce a conditioning. The file is "
+                "incomplete: download it again.")
         cond = yn * p["std_out"] + p["mean_out"]
 
         # Token 0 is an attention sink: its direction is constant across prompts
@@ -509,8 +582,9 @@ def _wrap(clip, projection):
         logging.info("[ClipProj] control %s: a reference point, not a learned "
                      "projection", projection)
     else:
-        logging.info("[ClipProj] %s | tap %d | %d -> %d%s", projection,
-                     int(p["tap"]), p["W"].shape[0], p["W"].shape[1],
+        logging.info("[ClipProj] %s | tap %d | %d -> %d%s%s", projection,
+                     int(p["tap"]), p["mean_in"].shape[0], p["mean_out"].shape[0],
+                     "" if "W" in p else " | residual only",
                      " | cos_test %.4f" % float(p["cos_test"]) if "cos_test" in p else "")
     return wrapped
 
@@ -597,29 +671,83 @@ def _load_encoder(clip_name, clip_type, device, mode, unique_id):
     # "No backend can handle 'dequantize_int8_embedding'", ne dit pas d'ou vient
     # le probleme. Signale sur r/StableDiffusion par quelqu'un qui avait suivi
     # mon conseil de quitter le mode resident.
+    # Un avertissement, plus un refus.
+    #
+    # 0.1.8 levait ici une ValueError : les poids int8 pages faisaient echouer
+    # la dequantification, qui recevait du bf16 la ou elle attendait de l'int8,
+    # sur un message ne nommant ni le noeud ni le fichier.
+    #
+    # Le seul point de rupture qu'on ait jamais identifie est le plongement de
+    # position de la tour de vision, et il est rattrape depuis 0.1.13. La preuve
+    # que le refus est devenu trop large tient en une observation : le Load CLIP
+    # de ComfyUI charge le meme fichier int8 sur le meme chemin pageable, le
+    # passe a ClipProjApply, et cela fonctionne. Interdire dans mon loader ce
+    # qui marche dans celui d'a cote n'a plus de sens.
+    #
+    # L'avertissement reste, parce que rien ne garantit qu'aucun autre poids
+    # int8 ne posera le meme probleme ailleurs : si cela arrive, il dit ou
+    # regarder au lieu de laisser un message opaque.
     formats = quantized_formats(path)
     if mode != "resident" and any("int" in q for q in formats):
-        raise ValueError(
-            "%s carries int8 quantized weights, which the '%s' mode cannot "
-            "page: ComfyUI moves and recasts them, and the dequantisation then "
-            "receives bf16 where it expects int8. Use 'resident' with this "
-            "file, or switch to a bf16 or fp8_scaled encoder if you need the "
-            "card to be freed between the encode and the sampling."
-            % (clip_name, mode))
+        logging.warning(
+            "[ClipProj] %s carries int8 quantized weights and '%s' pages them. "
+            "This works since 0.1.13, the vision tower having been fixed, but "
+            "it is the less travelled path: if a dequantisation error names a "
+            "layer, switch to 'resident' or to a bf16 or fp8_scaled encoder.",
+            clip_name, mode)
 
-    if mode == "resident":
-        clip = comfy.sd.load_clip(
-            ckpt_paths=[path], embedding_directory=embeddings, clip_type=ctype,
-            model_options={"load_device": dev, "offload_device": dev},
-            disable_dynamic=True)
+    # Trois modes, deux axes independants : ou le modele se replie quand il ne
+    # sert pas, et s'il se charge d'un bloc ou couche par couche.
+    #
+    #   resident   replie sur la carte, charge d'un bloc, epingle
+    #   streaming  replie en RAM,       charge d'un bloc, non epingle
+    #   dynamic    replie en RAM,       pagine par ComfyUI
+    #
+    # streaming et dynamic faisaient exactement la meme chose jusqu'ici : deux
+    # entrees dans le menu, une seule branche derriere. dynamic garde donc son
+    # comportement au mot pres, pour qu'aucun flux existant ne change de
+    # resultat, et streaming recoit celui que son nom annonce depuis le debut.
+    replie = dev if mode == "resident" else mm.text_encoder_offload_device()
+    dun_bloc = mode in ("resident", "streaming")
+
+    # Faire de la place AVANT un chargement d'un bloc, et la demander a ComfyUI.
+    #
+    # Les liberations plus haut ne rendent que ce que ce noeud avait pose. Un
+    # encodeur charge au rendu precedent en streaming n'est epingle par
+    # personne : il appartient a ComfyUI, qui le garde tant qu'il n'a pas
+    # besoin de la place. Tant que le chargement etait paresseux cela ne genait
+    # pas -- les poids arrivaient au fil de l'eau. Avec disable_dynamic ils
+    # sont poses d'un coup pendant load_sd, avant tout arbitrage memoire, et
+    # sur une carte de 12 Go l'OOM tombe au milieu du state_dict.
+    #
+    # La marge couvre les tampons de dequantification, qui existent le temps du
+    # chargement et ne sont dans aucun compte.
+    if dun_bloc:
+        try:
+            requis = int(os.path.getsize(path) * 1.15)
+            mm.free_memory(requis, dev)
+        except Exception as e:
+            logging.debug("[ClipProj] free_memory unavailable: %s", e)
+
+    clip = comfy.sd.load_clip(
+        ckpt_paths=[path], embedding_directory=embeddings, clip_type=ctype,
+        model_options={"load_device": dev, "offload_device": replie},
+        disable_dynamic=dun_bloc)
+    if dun_bloc:
         mm.load_models_gpu([clip.patcher], force_full_load=True)
+    if mode == "resident":
         pin_patcher(clip.patcher, "encoder %s on %s" % (clip_name, device),
                     role=role, key=key)
-    else:
-        clip = comfy.sd.load_clip(
-            ckpt_paths=[path], embedding_directory=embeddings, clip_type=ctype,
-            model_options={"load_device": dev,
-                           "offload_device": mm.text_encoder_offload_device()})
+    # Le correctif de la tour de vision est pose ici, et non plus seulement
+    # dans ProjectedCLIP : un encodeur charge par ce noeud puis utilise sans
+    # projection -- ou branche sur le ClipProjApply d'a cote -- passait a cote
+    # et retombait sur l'erreur de dequantification des qu'une image de
+    # reference etait presente. Il est idempotent et se retire de lui-meme si
+    # le modele n'a pas de tour de vision int8.
+    try:
+        install_int8_vision_fix(_submodel(clip))
+    except Exception as e:
+        logging.debug("[ClipProj] int8 vision fix not applicable: %s", e)
     logging.info("[ClipProj] %s (%s%s) loaded in %s mode on %s: %.2f GB", clip_name,
                  clip_type, label, mode, dev, clip.patcher.model_size() / 1024 ** 3)
     return clip
@@ -631,11 +759,17 @@ MODE_TOOLTIP = (
     "every sampling step. On a tight card that trade is a bad one: the encoder "
     "runs once, the DiT runs at every step, and it will start paging its own "
     "weights instead.\n"
-    "streaming / dynamic: pageable weights, ComfyUI can free the card between "
-    "the encode and the sampling. Prefer these unless you have room to spare. "
-    "Known limit: the dynamic path can fail inside the vision tower with int8 "
-    "encoders when an image is present, which is why resident is still the "
-    "default.")
+    "streaming: loaded in one go as well, but it folds back to RAM instead of "
+    "staying on the card. Same encoding speed as resident, and the VRAM is "
+    "returned for the sampling; it costs one full transfer each time the "
+    "encoder is used again.\n"
+    "dynamic: ComfyUI pages the weights layer by layer. Lowest peak usage, "
+    "slowest to encode.\n"
+    "Before 0.1.13 streaming and dynamic behaved identically. dynamic kept "
+    "that behaviour to the letter, so an existing workflow is unaffected.\n"
+    "int8 encoders work in all three since 0.1.13: the vision tower's position "
+    "embedding no longer calls the int8 dequantiser on a tensor ComfyUI has "
+    "already dequantised.")
 
 
 class ClipProjDeviceLoader:
