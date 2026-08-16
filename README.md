@@ -12,7 +12,7 @@ Requirement: Projection matrices on [Hugging Face](https://huggingface.co/NicoLa
 
 ## v3.1 — better multilingual speech (and 0.1.13 already loads it)
 
-**All of the gain is in speech.** Image generation was already indistinguishable from the 32B in v3 and still is. What v3.1 improves is pronunciation in the ten languages that are not English — **29 %% fewer phoneme errors overall, 60 to 74 %% fewer in Spanish, French, German and Italian.**
+**No measurable gain in image over v3 — the whole gain is in speech.** The image scores of the two generations overlap entirely, and nothing measured here separates either of them from the 32B, which is not the same as saying they are identical to it: the cosine is blind to countable attributes. What v3.1 improves is pronunciation in the ten languages that are not English — **29 %% fewer phoneme errors overall, 60 to 74 %% fewer in Spanish, French, German and Italian.**
 
 Four new files on [Hugging Face](https://huggingface.co/NicoLab28/ClipProj-MiniMax-H3):
 
