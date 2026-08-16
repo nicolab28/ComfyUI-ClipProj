@@ -6,7 +6,31 @@
 
 It also makes **`ClipProjApply` usable with an int8 encoder**. A quantised Qwen3-VL loaded through ComfyUI's own `Load CLIP` and passed to `ClipProjApply` failed inside the vision tower as soon as a reference image was present: `dequantize_int8_embedding` received a tensor the cast context had already dequantised to bf16, and said so in a message that named neither the node nor the file. The position embedding now falls back to a plain lookup instead. It never showed up on a text-only prompt, nor in resident mode, which is why it went unnoticed for so long.
 
-Requirement: Projection matrices on [Hugging Face](https://huggingface.co/NicoLab28/ClipProj-MiniMax-H3)  
+Requirement: Projection matrices on [Hugging Face](https://huggingface.co/NicoLab28/ClipProj-MiniMax-H3)
+
+---
+
+## v3.1 matrices are out — and 0.1.13 already loads them
+
+Four new files on [Hugging Face](https://huggingface.co/NicoLab28/ClipProj-MiniMax-H3):
+
+| File | Encoder | Head | Projection | With its encoder |
+|---|---|---|---|---|
+| **`mmh3-4b-ClipProj-v3.1`** | any Qwen3-VL-4B | ridge | 26 MB | **4.6 GB** |
+| `mmh3-4b-ClipProj-v3.1-mlp` | any Qwen3-VL-4B | residual only | 481 MB | 5.1 GB |
+| `mmh3-8b-ClipProj-v3.1` | any Qwen3-VL-8B | ridge | 41 MB | 9.6 GB |
+| `mmh3-8b-ClipProj-v3.1-mlp` | any Qwen3-VL-8B | residual only | 577 MB | 10.1 GB |
+
+**No node update is required** — same base as v3. As with the v3 residuals, the two `-mlp` files carry no `W` tensor and the loader reports `| residual only`: expected, not a truncated download.
+
+**What changed.** The calibration corpus now gives every writing system a comparable share instead of being overwhelmingly English, with raw Arabic text added — the last non-Latin script that only had tagged prompts. Phoneme errors drop **29 %% overall**, 60 to 74 %% on the European languages. Architecture and hyper-parameters are unchanged, so what improved is the data.
+
+**What it is measured against.** The 32B does not reproduce itself: change nothing but the seed and it re-pronounces **5.8 phonemes out of 75** differently. The v3.1 files sit at 6.4 to 7.0, so swapping the encoder costs about what re-rolling the seed costs. On that scale **nothing separates 4B from 8B, or ridge from residual** — only v3 from v3.1. Start with `mmh3-4b-ClipProj-v3.1` and go bigger only if your own prompts ask for it.
+
+Three seeds, 297 speech renders, 405 image renders, every raw file and an eleven-language demo video: **[the full report](https://huggingface.co/NicoLab28/ClipProj-MiniMax-H3/blob/main/bench3.1/README.md)**.
+
+---
+  
 
 > ## ⚠️ Proof of concept — working, but a proof of concept
 > **It runs and it produces good video**, and every number below was measured on real hardware rather than estimated. It is still a proof of concept, not a finished product: built and tested on a single setup — **Windows 11, NVIDIA, ComfyUI 0.31.0** — with deliberately limited exploration. Expect rough edges and breaking changes. **Use at your own risk.**
