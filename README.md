@@ -10,9 +10,9 @@ Requirement: Projection matrices on [Hugging Face](https://huggingface.co/NicoLa
 
 ---
 
-## v3.1 — multilingual speech, fixed (and 0.1.13 already loads it)
+## v3.1 — better multilingual speech (and 0.1.13 already loads it)
 
-**All of the gain is in speech.** Image generation was already indistinguishable from the 32B in v3 and still is. What v3.1 repairs is pronunciation in the ten languages that are not English — **29 %% fewer phoneme errors overall, 60 to 74 %% fewer in Spanish, French, German and Italian.**
+**All of the gain is in speech.** Image generation was already indistinguishable from the 32B in v3 and still is. What v3.1 improves is pronunciation in the ten languages that are not English — **29 %% fewer phoneme errors overall, 60 to 74 %% fewer in Spanish, French, German and Italian.**
 
 Four new files on [Hugging Face](https://huggingface.co/NicoLab28/ClipProj-MiniMax-H3):
 
